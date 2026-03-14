@@ -1,0 +1,15 @@
+# udev rules for Kinect v2 (Xbox One Kinect) — allows access without sudo
+# Install: sudo cp 71-kinect2.rules /etc/udev/rules.d/
+#          sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# Kinect for Windows v2 / Xbox One Kinect
+SUBSYSTEM=="usb", ATTR{idVendor}=="045e", ATTR{idProduct}=="02c4", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="045e", ATTR{idProduct}=="02d8", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="045e", ATTR{idProduct}=="02d9", MODE="0666", GROUP="plugdev"
+
+# Audio device
+SUBSYSTEM=="usb", ATTR{idVendor}=="045e", ATTR{idProduct}=="02c6", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="045e", ATTR{idProduct}=="02d7", MODE="0666", GROUP="plugdev"
+
+# Make sure the user is in the plugdev group:
+# sudo usermod -a -G plugdev $USER

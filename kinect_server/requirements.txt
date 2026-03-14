@@ -1,0 +1,7 @@
+pylibfreenect2>=0.1.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+scipy>=1.11.0
+python-osc>=1.8.0
+flask>=3.0.0
+mediapipe>=0.10.0
