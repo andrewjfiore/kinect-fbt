@@ -14,6 +14,9 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Platform backend factory — can be overridden by GUI or tests
+PLATFORM_BACKEND_FACTORY = None
+
 # Kinect v2 color camera intrinsics (hardcoded standard values)
 FX = 1081.37
 FY = 1081.37
@@ -103,6 +106,19 @@ class KinectCamera:
         return self._fps
 
     def _init_kinect(self):
+        # Use injected platform backend if available (set by GUI or tests)
+        global PLATFORM_BACKEND_FACTORY
+        if PLATFORM_BACKEND_FACTORY is not None:
+            try:
+                self._platform_backend = PLATFORM_BACKEND_FACTORY()
+                ok = self._platform_backend.open(self.device_index)
+                if ok:
+                    self._use_platform_backend = True
+                    return True
+            except Exception as e:
+                logger.warning(f"Platform backend failed: {e}, falling back to pylibfreenect2")
+
+        self._use_platform_backend = False
         try:
             import pylibfreenect2 as fn2
 
@@ -206,6 +222,21 @@ class KinectCamera:
             return self._capture_kinect_frame()
         else:
             return self._capture_synthetic_frame()
+
+    def _capture_frame(self, has_kinect: bool) -> Optional[CameraFrame]:
+        if hasattr(self, '_use_platform_backend') and self._use_platform_backend:
+            return self._capture_platform_frame()
+        if has_kinect:
+            return self._capture_kinect_frame()
+        else:
+            return self._capture_synthetic_frame()
+
+    def _capture_platform_frame(self) -> Optional[CameraFrame]:
+        result = self._platform_backend.get_frames()
+        if result is None:
+            return None
+        rgb_full, depth_registered = result
+        return self._process_frame(rgb_full, depth_registered)
 
     def _capture_kinect_frame(self) -> Optional[CameraFrame]:
         fn2 = self._fn2

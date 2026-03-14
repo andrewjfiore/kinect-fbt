@@ -1,0 +1,12 @@
+# Windows requirements (in addition to base requirements.txt)
+# Kinect for Windows SDK 2.0 must be installed first:
+# https://www.microsoft.com/en-us/download/details.aspx?id=44561
+
+pykinect2>=0.0.1
+opencv-python>=4.8.0
+numpy>=1.24.0
+scipy>=1.11.0
+python-osc>=1.8.0
+flask>=3.0.0
+mediapipe>=0.10.0
+pyinstaller>=6.0.0
