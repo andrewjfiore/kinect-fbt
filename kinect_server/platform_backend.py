@@ -497,6 +497,14 @@ class WindowsKinect2Backend(KinectBackend):
             return 1
         except ImportError:
             return 0
+        except Exception as e:
+            logger.error(
+                f"[Windows] pykinect2 import failed: {e}\n"
+                "This usually means pykinect2 is incompatible with your Python version.\n"
+                "pykinect2 requires Python 3.10 or earlier (not 3.12+).\n"
+                "Fix: install Python 3.10 and recreate your venv."
+            )
+            return 0
 
     def open(self, device_index: int) -> bool:
         if device_index > 0:
@@ -512,11 +520,12 @@ class WindowsKinect2Backend(KinectBackend):
             self._coord_mapper = self._kinect.CoordinateMapper
             logger.info("[Windows] Kinect v2 opened via Kinect for Windows SDK")
             return True
-        except ImportError:
+        except (ImportError, AssertionError) as e:
             logger.error(
-                "[Windows] pykinect2 not installed. Run: pip install pykinect2\n"
-                "Also install Kinect for Windows SDK 2.0: "
-                "https://www.microsoft.com/en-us/download/details.aspx?id=44561"
+                f"[Windows] pykinect2 not available: {e}\n"
+                "Install: pip install pykinect2\n"
+                "Requires: Kinect for Windows SDK 2.0 and Python 3.10 (not 3.12+)\n"
+                "SDK: https://www.microsoft.com/en-us/download/details.aspx?id=44561"
             )
             return False
         except Exception as e:
