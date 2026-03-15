@@ -751,6 +751,7 @@ class FBTServerGUI:
                 "joints_tracked": 0, "fusion_fps": 0.0,
                 "osc_target": f"{args['target_ip']}:{args['target_port']}",
                 "joints": {}, "calibration": cal, "trackers": {},
+                "preview_frames": self._preview_frames,  # shared ref — debug_http reads this
             }
 
             if args["debug"]:

@@ -78,8 +78,11 @@ class OneEuroFilter:
 
         self._last_time = timestamp
 
-        # Derivative
-        dx = (value - (self._x.last_value or value)) / dt
+        # Derivative (use `is not None` — 0.0 is a valid signal value)
+        prev = self._x.last_value
+        if prev is None:
+            prev = value
+        dx = (value - prev) / dt
         edx = self._dx.filter(dx, alpha=self._alpha(self.d_cutoff, dt))
 
         # Adaptive cutoff
