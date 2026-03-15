@@ -8,10 +8,16 @@ Design reference: SlimeVR server, KinectToVR (K2EX), Driver4VR
 import logging
 import platform
 import sys
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Tuple
 import numpy as np
+
+# Monkey-patch time.clock for pykinect2 compatibility with Python 3.8+
+# time.clock() was removed in Python 3.8; pykinect2 still uses it internally.
+if not hasattr(time, 'clock'):
+    time.clock = time.perf_counter
 
 logger = logging.getLogger(__name__)
 
