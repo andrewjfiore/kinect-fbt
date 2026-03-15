@@ -180,15 +180,17 @@ class KinectCamera:
         # (avoids index ordering conflicts between enumerate functions)
         try:
             from platform_backend import (
-                LinuxFreenect2Backend as _V2Backend,
-                LinuxFreenectV1Backend as _V1Backend,
+                LinuxFreenect2Backend as _LinuxV2Backend,
+                LinuxFreenectV1Backend as _LinuxV1Backend,
+                WindowsKinect2Backend as _WinV2Backend,
                 DEVICE_TYPE_V1 as _DT_V1, DEVICE_TYPE_V2 as _DT_V2,
+                IS_WINDOWS as _IS_WIN,
             )
             if self._device_type == _DT_V2:
-                backend = _V2Backend()
+                backend = _WinV2Backend() if _IS_WIN else _LinuxV2Backend()
                 hw_index = 0  # v2 devices are indexed from 0 within their type
             elif self._device_type == _DT_V1:
-                backend = _V1Backend()
+                backend = _LinuxV1Backend()
                 hw_index = 0  # v1 devices are indexed from 0 within their type
             else:
                 # Fall back to old auto-detect
