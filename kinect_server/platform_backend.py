@@ -450,7 +450,8 @@ class WindowsKinect2Backend(KinectBackend):
 
 
 # ──────────────────────────────────────────────────────────────
-# Synthetic backend (testing without hardware)
+# Linux backend: freenect (Kinect v1 / Xbox 360 Kinect)
+# USB ID: 045e:02ae, RGB 640x480, Depth 640x480 uint16 mm
 # ──────────────────────────────────────────────────────────────
 class SyntheticBackend(KinectBackend):
     def __init__(self, device_type: str = DEVICE_TYPE_V2):
@@ -559,7 +560,6 @@ def create_backend_for_device(device_index: int) -> Tuple[KinectBackend, str]:
         v1_index = device_index - v2_count
 
         if v1_index < v1_count:
-            # Adjust device index for v1
             return v1_backend, DEVICE_TYPE_V1
 
         return SyntheticBackend(), DEVICE_TYPE_SYNTHETIC
@@ -568,12 +568,12 @@ def create_backend_for_device(device_index: int) -> Tuple[KinectBackend, str]:
 
 
 def count_devices() -> int:
-    """Count total available Kinect devices (v1 + v2) on this platform."""
+    """Count available Kinect devices on this platform (v1 + v2)."""
     total = 0
     if IS_WINDOWS:
-        total = WindowsKinect2Backend().num_devices()
+        total += WindowsKinect2Backend().num_devices()
     elif IS_LINUX:
-        total = LinuxFreenect2Backend().num_devices()
+        total += LinuxFreenect2Backend().num_devices()
         total += LinuxFreenectV1Backend().num_devices()
     return total
 
@@ -595,3 +595,38 @@ def count_devices_by_type() -> Tuple[int, int]:
         v1_count = LinuxFreenectV1Backend().num_devices()
 
     return v2_count, v1_count
+
+
+def enumerate_all_devices() -> list:
+    """
+    Enumerate all connected Kinect devices with type info.
+    Returns list of dicts: {"index": int, "type": "v1"|"v2", "backend": KinectBackend}
+    """
+    devices = []
+    idx = 0
+
+    if IS_LINUX:
+        # v1 devices
+        v1 = LinuxFreenectV1Backend()
+        v1_count = v1.num_devices()
+        for i in range(v1_count):
+            devices.append({"index": idx, "hw_index": i, "type": "v1"})
+            idx += 1
+
+        # v2 devices
+        v2 = LinuxFreenect2Backend()
+        v2_count = v2.num_devices()
+        for i in range(v2_count):
+            devices.append({"index": idx, "hw_index": i, "type": "v2"})
+            idx += 1
+
+    elif IS_WINDOWS:
+        v2 = WindowsKinect2Backend()
+        if v2.num_devices() > 0:
+            devices.append({"index": idx, "hw_index": 0, "type": "v2"})
+            idx += 1
+
+    logger.info(f"Enumerated {len(devices)} Kinect device(s): "
+                f"v1={sum(1 for d in devices if d['type'] == 'v1')}, "
+                f"v2={sum(1 for d in devices if d['type'] == 'v2')}")
+    return devices

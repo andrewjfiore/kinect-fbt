@@ -115,14 +115,26 @@ class MultiCameraFusion:
         if not self._calibrated_origin:
             self._try_set_origin()
 
-        # Apply origin offset and height scale
+        # Return a copy with origin offset and height scale applied
+        # (never modify self._joints in-place — that causes cumulative drift)
         if self._origin is not None:
-            for joint in self._joints.values():
-                joint.x = (joint.x - self._origin[0]) * self._height_scale
-                joint.y = (joint.y - self._origin[1]) * self._height_scale
-                joint.z = (joint.z - self._origin[2]) * self._height_scale
+            output = {}
+            for name, joint in self._joints.items():
+                output[name] = FusedJoint(
+                    name=joint.name,
+                    x=(joint.x - self._origin[0]) * self._height_scale,
+                    y=(joint.y - self._origin[1]) * self._height_scale,
+                    z=(joint.z - self._origin[2]) * self._height_scale,
+                    confidence=joint.confidence,
+                    last_seen=joint.last_seen,
+                    is_lost=joint.is_lost,
+                )
+            return output
 
-        return self._joints
+        return {name: FusedJoint(
+            name=j.name, x=j.x, y=j.y, z=j.z,
+            confidence=j.confidence, last_seen=j.last_seen, is_lost=j.is_lost,
+        ) for name, j in self._joints.items()}
 
     def recalibrate_origin(self):
         """Reset the world origin (called on /calibrate OSC message)."""

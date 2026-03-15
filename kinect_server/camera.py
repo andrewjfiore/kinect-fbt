@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 # Platform backend factory — can be overridden by GUI or tests
 PLATFORM_BACKEND_FACTORY = None
 
+# Default Kinect intrinsics (used as fallback)
+DEFAULT_V2_INTRINSICS = {"fx": 1081.37, "fy": 1081.37, "cx": 959.5, "cy": 539.5}
+DEFAULT_V1_INTRINSICS = {"fx": 525.0, "fy": 525.0, "cx": 319.5, "cy": 239.5}
+
 # Legacy constants for backward compatibility (v2 defaults)
 FX = V2_FX
 FY = V2_FY
@@ -74,15 +78,11 @@ class KinectCamera:
     exposes latest frame via a queue.
     """
 
-    def __init__(self, device_index: int, fps_target: int = 20, device_type: str = None):
-        """
-        Args:
-            device_index: Camera index
-            fps_target: Target frames per second
-            device_type: Force device type ("v1", "v2") or None for auto-detect
-        """
+    def __init__(self, device_index: int, fps_target: int = 20,
+                 intrinsics: Optional[dict] = None, device_type: str = "v2"):
         self.device_index = device_index
         self.fps_target = fps_target
+        self.device_type = device_type
         self.frame_interval = 1.0 / fps_target
         self._device_type = device_type  # None = auto-detect
         self._device_info: Optional[DeviceInfo] = None
@@ -97,10 +97,25 @@ class KinectCamera:
         self._frame_count = 0
         self._fps_time = time.monotonic()
 
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device intrinsics (available after start())."""
-        return self._device_info or get_v2_device_info()
+        # Per-camera intrinsics
+        if intrinsics:
+            self._intrinsics = intrinsics
+        elif device_type == "v1":
+            self._intrinsics = DEFAULT_V1_INTRINSICS.copy()
+        else:
+            self._intrinsics = DEFAULT_V2_INTRINSICS.copy()
+        self._fx = self._intrinsics["fx"]
+        self._fy = self._intrinsics["fy"]
+        self._cx = self._intrinsics["cx"]
+        self._cy = self._intrinsics["cy"]
+
+        # Native resolution for intrinsics (v1: 640x480, v2: 1920x1080)
+        if device_type == "v1":
+            self._native_w = 640
+            self._native_h = 480
+        else:
+            self._native_w = 1920
+            self._native_h = 1080
 
     def start(self):
         import threading
@@ -322,16 +337,21 @@ class KinectCamera:
 
                 depth_mm, depth_confidence = self._lookup_depth(depth_registered, px, py, info)
 
+                # Use per-camera intrinsics scaled to full-res image
+                cam_fx = self._fx * (w_full / self._native_w)
+                cam_fy = self._fy * (h_full / self._native_h)
+                cam_cx = self._cx * (w_full / self._native_w)
+                cam_cy = self._cy * (h_full / self._native_h)
+
                 if depth_confidence > 0:
-                    # Use per-camera intrinsics for 3D projection
-                    x_m = (px - cx) * depth_mm / (fx * 1000.0)
-                    y_m = (py - cy) * depth_mm / (fy * 1000.0)
+                    x_m = (px - cam_cx) * depth_mm / (cam_fx * 1000.0)
+                    y_m = (py - cam_cy) * depth_mm / (cam_fy * 1000.0)
                     z_m = depth_mm / 1000.0
                 else:
                     # Monocular fallback using MediaPipe's Z estimate
                     z_m = abs(lm.z) * 2.0  # rough scale
-                    x_m = (px - cx) * z_m / (fx / 1000.0)
-                    y_m = (py - cy) * z_m / (fy / 1000.0)
+                    x_m = (px - cam_cx) * z_m / cam_fx
+                    y_m = (py - cam_cy) * z_m / cam_fy
                     depth_confidence = 0.1
 
                 landmarks_3d[idx] = Landmark3D(
@@ -342,7 +362,7 @@ class KinectCamera:
                 )
 
             # Draw skeleton overlay on full-res preview
-            self._draw_skeleton(rgb_full, landmarks_3d, info)
+            self._draw_skeleton(rgb_full, landmarks_3d)
 
         return CameraFrame(
             camera_id=self.device_index,
@@ -375,17 +395,17 @@ class KinectCamera:
 
         return 0.0, 0.0
 
-    def _draw_skeleton(self, img: np.ndarray, landmarks: List[Optional[Landmark3D]],
-                       info: DeviceInfo):
-        """Draw skeleton overlay using per-camera intrinsics."""
-        fx, fy, cx, cy = info.fx, info.fy, info.cx, info.cy
+    def _draw_skeleton(self, img: np.ndarray, landmarks: List[Optional[Landmark3D]]):
+        h, w = img.shape[:2]
+        draw_fx = self._fx * (w / self._native_w)
+        draw_fy = self._fy * (h / self._native_h)
+        draw_cx = self._cx * (w / self._native_w)
+        draw_cy = self._cy * (h / self._native_h)
         for lm in landmarks:
             if lm is None:
                 continue
-            h, w = img.shape[:2]
-            z = lm.z if lm.z > 0 else 1
-            px = int(lm.x * fx / z + cx)
-            py = int(lm.y * fy / z + cy)
+            px = int((lm.x * draw_fx / (lm.z if lm.z > 0 else 1) + draw_cx))
+            py = int((lm.y * draw_fy / (lm.z if lm.z > 0 else 1) + draw_cy))
             px = max(0, min(px, w - 1))
             py = max(0, min(py, h - 1))
             if lm.depth_confidence >= 0.9:
@@ -397,18 +417,91 @@ class KinectCamera:
             cv2.circle(img, (px, py), 5, color, -1)
 
 
+@dataclass
+class KinectDeviceInfo:
+    """Describes a detected Kinect sensor."""
+    index: int
+    device_type: str  # "v1" or "v2"
+    rgb_resolution: Tuple[int, int]
+    depth_resolution: Tuple[int, int]
+    intrinsics: dict
+
+
 def enumerate_kinect_devices() -> int:
     """Return the total number of connected Kinect devices (v1 + v2)."""
-    from platform_backend import count_devices, count_devices_by_type
+    devices = enumerate_kinect_devices_detailed()
+    return len(devices)
+
+
+def enumerate_kinect_devices_detailed() -> List[KinectDeviceInfo]:
+    """Detect all connected Kinect v1 and v2 devices with metadata."""
+    import subprocess
+    devices = []
+    global_index = 0
+
+    # Detect v1 devices via USB ID 045e:02ae
     try:
-        total = count_devices()
-        v2, v1 = count_devices_by_type()
-        if v1 > 0 or v2 > 0:
-            logger.info(f"Found {total} Kinect device(s): {v2} v2, {v1} v1")
-        else:
-            logger.warning("No Kinect hardware found — defaulting to 1 synthetic camera")
-            return 1
-        return total
+        result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
+        v1_count = result.stdout.count("045e:02ae")
+        for i in range(v1_count):
+            devices.append(KinectDeviceInfo(
+                index=global_index,
+                device_type="v1",
+                rgb_resolution=(640, 480),
+                depth_resolution=(640, 480),
+                intrinsics=DEFAULT_V1_INTRINSICS.copy(),
+            ))
+            global_index += 1
+            logger.info(f"Found Kinect v1 device (index {global_index - 1})")
     except Exception as e:
-        logger.error(f"Error enumerating Kinect devices: {e}")
-        return 1
+        logger.debug(f"lsusb v1 detection failed: {e}")
+
+    # Detect v2 devices via pylibfreenect2
+    try:
+        import pylibfreenect2 as fn2
+        fn2.setGlobalLogger(fn2.createConsoleLogger(fn2.LoggerLevel.Warning))
+        freenect = fn2.Freenect2()
+        v2_count = freenect.enumerateDevices()
+        for i in range(v2_count):
+            devices.append(KinectDeviceInfo(
+                index=global_index,
+                device_type="v2",
+                rgb_resolution=(1920, 1080),
+                depth_resolution=(512, 424),
+                intrinsics=DEFAULT_V2_INTRINSICS.copy(),
+            ))
+            global_index += 1
+            logger.info(f"Found Kinect v2 device (index {global_index - 1})")
+    except ImportError:
+        # Also check for v2 via USB ID
+        try:
+            result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
+            v2_count = result.stdout.count("045e:02d8")
+            for i in range(v2_count):
+                devices.append(KinectDeviceInfo(
+                    index=global_index,
+                    device_type="v2",
+                    rgb_resolution=(1920, 1080),
+                    depth_resolution=(512, 424),
+                    intrinsics=DEFAULT_V2_INTRINSICS.copy(),
+                ))
+                global_index += 1
+                logger.info(f"Found Kinect v2 device via USB (index {global_index - 1})")
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Error enumerating Kinect v2 devices: {e}")
+
+    if not devices:
+        logger.warning("No Kinect devices found — defaulting to 1 synthetic camera")
+        devices.append(KinectDeviceInfo(
+            index=0, device_type="v2",
+            rgb_resolution=(1920, 1080),
+            depth_resolution=(512, 424),
+            intrinsics=DEFAULT_V2_INTRINSICS.copy(),
+        ))
+
+    logger.info(f"Total Kinect devices: {len(devices)} "
+                f"(v1: {sum(1 for d in devices if d.device_type == 'v1')}, "
+                f"v2: {sum(1 for d in devices if d.device_type == 'v2')})")
+    return devices

@@ -8,8 +8,13 @@ Full-body tracking (FBT) system for Meta Quest 3 + VRChat using Kinect sensors.
 - **Mixed setups** — e.g., one v1 on front wall + one v2 on back wall
 
 **Architecture:**
-- **Linux server** (`kinect_server/`): reads RGB+depth from N Kinect devices, fuses 3D skeleton joints across cameras, streams tracker data via OSC/UDP
+- **Linux server** (`kinect_server/`): reads RGB+depth from N Kinect v1/v2 devices, fuses 3D skeleton joints across cameras, streams tracker data via OSC/UDP
 - **Quest APK** (`quest_app/`): receives fused tracker data, forwards VRChat-compatible OSC to `127.0.0.1:9000`
+
+**Key Features:**
+- **Kinect v1 + v2 support** — mix and match Xbox 360 Kinect (v1) and Xbox One Kinect (v2) sensors
+- **Arbitrary camera placement** — cameras can be placed anywhere (opposing walls, 360° around room)
+- **Multiple calibration modes** — checkerboard (pairwise), manual position entry, T-pose auto-calibration
 
 ---
 
@@ -18,13 +23,26 @@ Full-body tracking (FBT) system for Meta Quest 3 + VRChat using Kinect sensors.
 | Item | Notes |
 |------|-------|
 | Kinect for Xbox One (v2) | 1–8 units supported, best quality |
-| Kinect for Xbox 360 (v1) | 1–4 units, lower resolution but works |
+| Kinect for Xbox 360 (v1) | 1–4 units, lower resolution but works — can mix with v2 |
 | USB 3.0 host controllers | **One per Kinect v2** — v1 works on USB 2.0 |
+| USB 2.0 port | One per Kinect v1 (lower bandwidth requirement) |
 | Linux host (Ubuntu 20.04+) | Tested on Ubuntu 22.04; Windows partial support |
 | Meta Quest 3 | Developer mode required |
 | Wi-Fi LAN | Quest and Linux host on the same network |
 
-> **Critical:** Each Kinect v2 needs its own USB 3.0 host controller, not just a separate port on a shared hub. A PCIe USB 3.0 card (e.g. Inateck KT4004) provides 4 independent controllers and is recommended for 3–4 Kinects. Kinect v1 is less demanding and works on shared USB 2.0 hubs.
+> **Critical:** Each Kinect v2 needs its own USB 3.0 host controller, not just a separate port on a shared hub. A PCIe USB 3.0 card (e.g. Inateck KT4004) provides 4 independent controllers and is recommended for 3–4 Kinects. Kinect v1 sensors only need USB 2.0.
+
+### Kinect v1 (Xbox 360) Setup
+
+```bash
+# Install libfreenect for v1 support
+sudo apt-get install -y libfreenect-dev freenect
+pip install freenect
+
+# Verify v1 detection
+lsusb | grep "045e:02ae"
+# Should show: Bus 00X Device 00Y: ID 045e:02ae Microsoft Corp. Xbox NUI Camera
+```
 
 ---
 
@@ -166,16 +184,30 @@ Per-camera intrinsics are handled automatically.
 
 ### Placement procedure
 
-1. Place checkerboard where ALL cameras can see it simultaneously (center of the tracking volume works well)
-2. Angle it ~30° so cameras don't see it straight-on (avoids ambiguity)
-3. Stand back so the full board is visible in each camera's frame
+Cameras can be placed **anywhere** — including on opposing walls or in a full 360° circle.
+The calibration system supports sequential pairwise capture, so you only need adjacent cameras to share a view.
 
-### Run calibration
+### Calibration methods
 
+**1. Checkerboard (pairwise) — most accurate:**
 ```bash
 source venv/bin/activate
 python server.py --calibrate --calibration-file calibration.json
-# Follow on-screen instructions. Captures 30 frames automatically.
+# Calibrates camera pairs sequentially — only 2 adjacent cameras need to see
+# the checkerboard at a time. Follow on-screen prompts.
+```
+
+**2. T-pose calibration — no checkerboard needed:**
+```bash
+python server.py --calibrate-tpose --calibration-file calibration.json
+# Stand in center doing T-pose. System auto-computes transforms from skeleton.
+```
+
+**3. Manual calibration — enter positions directly:**
+```bash
+python server.py --calibrate-manual --calibration-file calibration.json
+# Enter each camera's position (x,y,z in meters) and yaw (degrees).
+# Useful for fixed installations or when other methods aren't possible.
 ```
 
 ### Verify calibration

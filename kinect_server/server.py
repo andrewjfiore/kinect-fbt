@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from camera import KinectCamera, CameraFrame, enumerate_kinect_devices
-from calibration import build_default_calibration, load_calibration, run_calibration
+from calibration import build_default_calibration, load_calibration, run_calibration, run_manual_calibration, run_tpose_calibration
 from fusion import MultiCameraFusion
 from osc_output import OSCOutput
 from debug_http import init_debug_server, start_debug_server
@@ -44,7 +44,11 @@ def parse_args():
                    help="Camera layout for default calibration: 'arc' (semicircle), "
                         "'facing' (2 cameras on opposite walls), or 'auto' (facing if 2 cams, arc otherwise)")
     p.add_argument("--calibrate", action="store_true",
-                   help="Run calibration mode and exit")
+                   help="Run checkerboard calibration mode and exit")
+    p.add_argument("--calibrate-manual", action="store_true",
+                   help="Run manual calibration (enter position/yaw per camera)")
+    p.add_argument("--calibrate-tpose", action="store_true",
+                   help="Run T-pose calibration (stand in center)")
     p.add_argument("--calibration-file", type=str, default="calibration.json",
                    help="Path to calibration JSON file")
     p.add_argument("--debug-server", action="store_true",
@@ -66,18 +70,45 @@ def main():
             logger.error("No Kinect devices found!")
             sys.exit(1)
 
+    # Detect device types for mixed v1/v2 setups
+    from camera import enumerate_kinect_devices_detailed
+    detected = enumerate_kinect_devices_detailed()
+
     logger.info(f"Using {num_cameras} camera(s)")
-    cameras = [KinectCamera(i, fps_target=args.fps) for i in range(num_cameras)]
+    cameras = []
+    for i in range(num_cameras):
+        if i < len(detected):
+            dev = detected[i]
+            cameras.append(KinectCamera(i, fps_target=args.fps,
+                                         intrinsics=dev.intrinsics,
+                                         device_type=dev.device_type))
+        else:
+            cameras.append(KinectCamera(i, fps_target=args.fps))
 
     # Start cameras
     for cam in cameras:
         cam.start()
 
-    # Calibration mode
+    # Calibration modes
     if args.calibrate:
-        logger.info("Running calibration mode...")
-        time.sleep(2)  # Let cameras warm up
+        logger.info("Running checkerboard calibration mode...")
+        time.sleep(2)
         run_calibration(cameras, filepath=args.calibration_file)
+        for cam in cameras:
+            cam.stop()
+        sys.exit(0)
+
+    if args.calibrate_manual:
+        logger.info("Running manual calibration mode...")
+        run_manual_calibration(cameras, filepath=args.calibration_file)
+        for cam in cameras:
+            cam.stop()
+        sys.exit(0)
+
+    if args.calibrate_tpose:
+        logger.info("Running T-pose calibration mode...")
+        time.sleep(2)
+        run_tpose_calibration(cameras, filepath=args.calibration_file)
         for cam in cameras:
             cam.stop()
         sys.exit(0)
