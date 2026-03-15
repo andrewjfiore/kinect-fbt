@@ -192,7 +192,7 @@ def main():
                 state["joints_tracked"] = fusion.joints_tracked_count()
 
                 # Update preview frames for HTTP debug server (non-destructive copy)
-                for f in frames:
+                for f in frames_to_fuse:
                     if f.rgb_preview is not None:
                         state["preview_frames"][f.camera_id] = {"rgb": f.rgb_preview}
 

@@ -11,14 +11,35 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import cv2
-import mediapipe as mp
 import numpy as np
+
+# MediaPipe 0.10+ uses Tasks API; earlier versions used solutions API
+try:
+    from mediapipe.tasks.python import vision as _mp_vision
+    from mediapipe.tasks.python.core.base_options import BaseOptions as _MpBaseOptions
+    _MP_TASKS_API = True
+except ImportError:
+    import mediapipe as mp
+    _MP_TASKS_API = False
+
+import os as _os
+_POSE_MODEL_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "pose_landmarker.task")
+_POSE_MODEL_FALLBACK = "/home/andrew/Desktop/kinect-fbt/kinect_server/pose_landmarker.task"
 
 from platform_backend import (
     DeviceInfo, get_v2_device_info, get_synthetic_device_info,
     create_backend_for_device, DEVICE_TYPE_V1, DEVICE_TYPE_V2,
     V2_FX, V2_FY, V2_CX, V2_CY, V2_DEPTH_MIN_MM, V2_DEPTH_MAX_MM,
+    LinuxFreenect2Backend,
 )
+
+
+def _count_v2_devices() -> int:
+    """Count Kinect v2 devices for index offset calculation."""
+    try:
+        return LinuxFreenect2Backend().num_devices()
+    except Exception:
+        return 0
 
 logger = logging.getLogger(__name__)
 
@@ -151,20 +172,55 @@ class KinectCamera:
                     self._use_platform_backend = True
                     return True
             except Exception as e:
-                logger.warning(f"Platform backend failed: {e}, falling back to pylibfreenect2")
+                logger.warning(f"Platform backend failed: {e}, falling back to auto-detect")
 
         self._use_platform_backend = False
+
+        # Use the device_type set at construction to select the right backend
+        # (avoids index ordering conflicts between enumerate functions)
+        try:
+            from platform_backend import (
+                LinuxFreenect2Backend as _V2Backend,
+                LinuxFreenectV1Backend as _V1Backend,
+                DEVICE_TYPE_V1 as _DT_V1, DEVICE_TYPE_V2 as _DT_V2,
+            )
+            if self._device_type == _DT_V2:
+                backend = _V2Backend()
+                hw_index = 0  # v2 devices are indexed from 0 within their type
+            elif self._device_type == _DT_V1:
+                backend = _V1Backend()
+                hw_index = 0  # v1 devices are indexed from 0 within their type
+            else:
+                # Fall back to old auto-detect
+                backend, dtype = create_backend_for_device(self.device_index)
+                hw_index = self.device_index
+                if dtype == "synthetic":
+                    backend = None
+
+            if backend is not None:
+                ok = backend.open(hw_index)
+                if ok:
+                    self._platform_backend = backend
+                    self._use_platform_backend = True
+                    self._device_info = backend.get_device_info()
+                    logger.info(f"Camera {self.device_index}: opened via platform backend ({self._device_type})")
+                    return True
+                else:
+                    logger.warning(f"Camera {self.device_index}: backend.open({hw_index}) failed for type={self._device_type}, falling back to synthetic")
+        except Exception as e:
+            logger.warning(f"Camera {self.device_index}: platform backend init failed: {e}")
+
+        # Legacy: try pylibfreenect2 directly (unlikely to work with Cython 3.x)
         try:
             import pylibfreenect2 as fn2
 
             fn2.setGlobalLogger(fn2.createConsoleLogger(fn2.LoggerLevel.Warning))
 
-            # Try OpenGL pipeline first
             try:
                 self._pipeline = fn2.OpenGLPacketPipeline()
                 logger.info(f"Camera {self.device_index}: using OpenGL pipeline")
             except Exception:
-                logger.warning(f"Camera {self.device_index}: OpenGL pipeline failed, falling back to CPU (depth quality will be lower)")
+                logger.warning(f"Camera {self.device_index}: OpenGL pipeline failed, falling back to CPU")
                 self._pipeline = fn2.CpuPacketPipeline()
 
             self._fn2 = fn2
@@ -185,7 +241,7 @@ class KinectCamera:
             self._device.setColorFrameListener(self._listener)
             self._device.setIrAndDepthFrameListener(self._listener)
             self._device.start()
-            logger.info(f"Camera {self.device_index}: Kinect opened (serial={serial})")
+            logger.info(f"Camera {self.device_index}: Kinect opened via pylibfreenect2 (serial={serial})")
             return True
         except ImportError:
             logger.warning(f"Camera {self.device_index}: pylibfreenect2 not available, using synthetic data")
@@ -195,14 +251,37 @@ class KinectCamera:
             return False
 
     def _init_mediapipe(self):
-        mp_pose = mp.solutions.pose
-        self._mp_pose = mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,
-            smooth_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-        )
+        if _MP_TASKS_API:
+            # MediaPipe 0.10+ Tasks API
+            model_path = _POSE_MODEL_PATH if _os.path.exists(_POSE_MODEL_PATH) else _POSE_MODEL_FALLBACK
+            if not _os.path.exists(model_path):
+                raise RuntimeError(
+                    f"MediaPipe pose model not found at {model_path}. "
+                    "Download it: wget https://storage.googleapis.com/mediapipe-models/"
+                    "pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task "
+                    "-O kinect_server/pose_landmarker.task"
+                )
+            options = _mp_vision.PoseLandmarkerOptions(
+                base_options=_MpBaseOptions(model_asset_path=model_path),
+                running_mode=_mp_vision.RunningMode.VIDEO,
+                num_poses=1,
+                min_pose_detection_confidence=0.5,
+                min_pose_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self._mp_pose = _mp_vision.PoseLandmarker.create_from_options(options)
+            self._mp_frame_ts = 0  # ms counter for VIDEO mode
+        else:
+            # Legacy API (mediapipe < 0.10)
+            mp_pose = mp.solutions.pose
+            self._mp_pose = mp_pose.Pose(
+                static_image_mode=False,
+                model_complexity=1,
+                smooth_landmarks=True,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self._mp_frame_ts = None
 
     def _run(self):
         self._init_mediapipe()
@@ -250,7 +329,10 @@ class KinectCamera:
             except Exception:
                 pass
         if self._mp_pose is not None:
-            self._mp_pose.close()
+            try:
+                self._mp_pose.close()
+            except Exception:
+                pass
 
     def _capture_frame(self, has_kinect: bool) -> Optional[CameraFrame]:
         if hasattr(self, '_use_platform_backend') and self._use_platform_backend:
@@ -311,6 +393,22 @@ class KinectCamera:
         depth_registered = np.ones((info.height, info.width), dtype=np.float32) * 2000.0
         return self._process_frame(rgb_full, depth_registered)
 
+    def _run_pose(self, rgb_mp: np.ndarray):
+        """Run MediaPipe pose detection, returning list of landmarks or None."""
+        if _MP_TASKS_API:
+            import mediapipe as _mp_core
+            mp_image = _mp_core.Image(image_format=_mp_core.ImageFormat.SRGB, data=rgb_mp)
+            self._mp_frame_ts += 33  # ~30fps in ms
+            result = self._mp_pose.detect_for_video(mp_image, self._mp_frame_ts)
+            if result.pose_landmarks:
+                return result.pose_landmarks[0]  # list of NormalizedLandmark
+            return None
+        else:
+            result = self._mp_pose.process(rgb_mp)
+            if result.pose_landmarks:
+                return result.pose_landmarks.landmark
+            return None
+
     def _process_frame(self, rgb_full: np.ndarray, depth_registered: np.ndarray) -> CameraFrame:
         # Use per-camera intrinsics or defaults
         info = self._device_info or get_v2_device_info()
@@ -320,14 +418,14 @@ class KinectCamera:
         rgb_small = cv2.resize(rgb_full, (640, 480))
         rgb_mp = cv2.cvtColor(rgb_small, cv2.COLOR_BGR2RGB)
 
-        results = self._mp_pose.process(rgb_mp)
+        pose_landmarks = self._run_pose(rgb_mp)
 
         landmarks_3d: List[Optional[Landmark3D]] = [None] * NUM_LANDMARKS
 
-        if results.pose_landmarks:
+        if pose_landmarks:
             h_full, w_full = rgb_full.shape[:2]
 
-            for idx, lm in enumerate(results.pose_landmarks.landmark):
+            for idx, lm in enumerate(pose_landmarks):
                 if lm.visibility < 0.5:
                     continue
 
@@ -460,12 +558,11 @@ def enumerate_kinect_devices_detailed() -> List[KinectDeviceInfo]:
     except Exception as e:
         logger.debug(f"lsusb v1 detection failed: {e}")
 
-    # Detect v2 devices via pylibfreenect2
+    # Detect v2 devices via fn2_shim (ctypes wrapper) or pylibfreenect2
+    v2_count = 0
     try:
-        import pylibfreenect2 as fn2
-        fn2.setGlobalLogger(fn2.createConsoleLogger(fn2.LoggerLevel.Warning))
-        freenect = fn2.Freenect2()
-        v2_count = freenect.enumerateDevices()
+        v2_backend = LinuxFreenect2Backend()
+        v2_count = v2_backend.num_devices()
         for i in range(v2_count):
             devices.append(KinectDeviceInfo(
                 index=global_index,
@@ -476,12 +573,15 @@ def enumerate_kinect_devices_detailed() -> List[KinectDeviceInfo]:
             ))
             global_index += 1
             logger.info(f"Found Kinect v2 device (index {global_index - 1})")
-    except ImportError:
-        # Also check for v2 via USB ID
+    except Exception as e:
+        logger.debug(f"fn2_shim v2 detection failed: {e}")
+
+    if v2_count == 0:
+        # Fallback: check USB IDs for v2 (045e:02c4 preview or 045e:02d8 retail)
         try:
             result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
-            v2_count = result.stdout.count("045e:02d8")
-            for i in range(v2_count):
+            v2_usb = result.stdout.count("045e:02d8") + result.stdout.count("045e:02c4")
+            for i in range(v2_usb):
                 devices.append(KinectDeviceInfo(
                     index=global_index,
                     device_type="v2",
@@ -493,8 +593,6 @@ def enumerate_kinect_devices_detailed() -> List[KinectDeviceInfo]:
                 logger.info(f"Found Kinect v2 device via USB (index {global_index - 1})")
         except Exception:
             pass
-    except Exception as e:
-        logger.error(f"Error enumerating Kinect v2 devices: {e}")
 
     if not devices:
         logger.warning("No Kinect devices found — defaulting to 1 synthetic camera")

@@ -111,87 +111,239 @@ class KinectBackend(ABC):
 
 
 # ──────────────────────────────────────────────────────────────
-# Linux backend: pylibfreenect2 (Kinect v2)
+# Linux backend: libfreenect2 via C shim (Kinect v2)
+# Uses libfn2_shim.so — a thin C wrapper around the C++ API.
+# This replaces pylibfreenect2 which is broken with Cython 3.x.
 # ──────────────────────────────────────────────────────────────
+import ctypes
+import os as _os
+
+def _load_fn2_shim():
+    """Load the libfn2_shim.so C wrapper for libfreenect2."""
+    shim_dir = _os.path.dirname(_os.path.abspath(__file__))
+    shim_path = _os.path.join(shim_dir, "libfn2_shim.so")
+    if not _os.path.exists(shim_path):
+        return None
+    try:
+        lib = ctypes.CDLL(shim_path)
+        # Context
+        lib.fn2_create.restype = ctypes.c_void_p
+        lib.fn2_destroy.argtypes = [ctypes.c_void_p]
+        lib.fn2_enumerate.argtypes = [ctypes.c_void_p]
+        lib.fn2_enumerate.restype = ctypes.c_int
+        lib.fn2_get_serial.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        lib.fn2_get_serial.restype = ctypes.c_int
+        # Device
+        lib.fn2_open_device.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+        lib.fn2_open_device.restype = ctypes.c_void_p
+        # Listener
+        lib.fn2_create_listener.argtypes = [ctypes.c_uint]
+        lib.fn2_create_listener.restype = ctypes.c_void_p
+        lib.fn2_set_listeners.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        # Registration
+        lib.fn2_create_registration.argtypes = [ctypes.c_void_p]
+        lib.fn2_create_registration.restype = ctypes.c_void_p
+        lib.fn2_destroy_registration.argtypes = [ctypes.c_void_p]
+        # Start/Stop
+        lib.fn2_start.argtypes = [ctypes.c_void_p]
+        lib.fn2_start.restype = ctypes.c_int
+        lib.fn2_stop.argtypes = [ctypes.c_void_p]
+        lib.fn2_stop.restype = ctypes.c_int
+        lib.fn2_close.argtypes = [ctypes.c_void_p]
+        lib.fn2_close.restype = ctypes.c_int
+        # Frames
+        lib.fn2_wait_for_frame.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+        lib.fn2_wait_for_frame.restype = ctypes.c_int
+        lib.fn2_get_frame_data.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+        lib.fn2_get_frame_data.restype = ctypes.c_int
+        lib.fn2_release_frame.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.fn2_cleanup_slot.argtypes = [ctypes.c_int]
+        # Frame type constants
+        lib.fn2_frame_type_color.restype = ctypes.c_int
+        lib.fn2_frame_type_depth.restype = ctypes.c_int
+        return lib
+    except Exception as e:
+        logger.warning(f"Failed to load libfn2_shim.so: {e}")
+        return None
+
+
+class _Fn2FrameData(ctypes.Structure):
+    """Matches fn2_frame_data in fn2_shim.cpp"""
+    _fields_ = [
+        ("color_data", ctypes.c_void_p),
+        ("depth_data", ctypes.c_void_p),
+        ("color_width", ctypes.c_int),
+        ("color_height", ctypes.c_int),
+        ("bigdepth_data", ctypes.c_void_p),
+        ("bigdepth_width", ctypes.c_int),
+        ("bigdepth_height", ctypes.c_int),
+    ]
+
+
+# Pipeline type constants for fn2_open_device
+_FN2_PIPELINE_CPU = 0
+_FN2_PIPELINE_OPENGL = 1
+_FN2_PIPELINE_OPENCL = 2
+_FN2_PIPELINE_CUDA = 3
+
+
 class LinuxFreenect2Backend(KinectBackend):
+    """Kinect v2 backend using libfn2_shim.so (ctypes wrapper around libfreenect2)."""
+
+    _shim = None  # class-level: loaded once
+
     def __init__(self):
+        self._ctx = None
         self._device = None
-        self._pipeline = None
         self._listener = None
         self._registration = None
-        self._fn2 = None
+        self._slot = 0  # frame slot index
+        self._device_index = 0
+        if LinuxFreenect2Backend._shim is None:
+            LinuxFreenect2Backend._shim = _load_fn2_shim()
+
+    @property
+    def _lib(self):
+        return LinuxFreenect2Backend._shim
 
     def get_device_info(self) -> DeviceInfo:
         return get_v2_device_info()
 
     def num_devices(self) -> int:
+        if self._lib is None:
+            logger.warning("libfn2_shim.so not available — cannot enumerate Kinect v2 devices")
+            return 0
         try:
-            import pylibfreenect2 as fn2
-            fn2.setGlobalLogger(fn2.createConsoleLogger(fn2.LoggerLevel.Warning))
-            return fn2.Freenect2().enumerateDevices()
+            ctx = self._lib.fn2_create()
+            if not ctx:
+                return 0
+            count = self._lib.fn2_enumerate(ctx)
+            self._lib.fn2_destroy(ctx)
+            return count
         except Exception as e:
-            logger.warning(f"pylibfreenect2 enumerate failed: {e}")
+            logger.warning(f"fn2_shim enumerate failed: {e}")
             return 0
 
     def open(self, device_index: int) -> bool:
+        if self._lib is None:
+            logger.error("[Linux] libfn2_shim.so not available")
+            return False
         try:
-            import pylibfreenect2 as fn2
-            fn2.setGlobalLogger(fn2.createConsoleLogger(fn2.LoggerLevel.Warning))
-            self._fn2 = fn2
+            self._device_index = device_index
+            self._slot = device_index % 4  # up to 4 concurrent devices
 
-            try:
-                self._pipeline = fn2.OpenGLPacketPipeline()
-                logger.info(f"[Linux] Camera {device_index}: OpenGL pipeline")
-            except Exception:
-                logger.warning(f"[Linux] Camera {device_index}: OpenGL failed, using CPU pipeline (depth quality lower)")
-                self._pipeline = fn2.CpuPacketPipeline()
+            self._ctx = self._lib.fn2_create()
+            if not self._ctx:
+                logger.error("[Linux] Failed to create freenect2 context")
+                return False
 
-            freenect = fn2.Freenect2()
-            serial = freenect.getDeviceSerialNumber(device_index)
-            self._device = freenect.openDevice(serial, self._pipeline)
-            self._registration = fn2.Registration(
-                self._device.getIrCameraParams(),
-                self._device.getColorCameraParams(),
-            )
-            types = fn2.FrameType.Color | fn2.FrameType.Depth
-            self._listener = fn2.SyncMultiFrameListener(types)
-            self._device.setColorFrameListener(self._listener)
-            self._device.setIrAndDepthFrameListener(self._listener)
-            self._device.start()
-            logger.info(f"[Linux] Camera {device_index} opened")
+            count = self._lib.fn2_enumerate(self._ctx)
+            if device_index >= count:
+                logger.error(f"[Linux] Device {device_index} not found ({count} devices)")
+                return False
+
+            # Try CPU pipeline (most compatible)
+            self._device = self._lib.fn2_open_device(self._ctx, device_index, _FN2_PIPELINE_CPU)
+            if not self._device:
+                logger.error(f"[Linux] Failed to open device {device_index}")
+                return False
+            logger.info(f"[Linux] Camera {device_index}: CPU pipeline via fn2_shim")
+
+            # Create listener for Color | Depth
+            frame_types = self._lib.fn2_frame_type_color() | self._lib.fn2_frame_type_depth()
+            self._listener = self._lib.fn2_create_listener(frame_types)
+            self._lib.fn2_set_listeners(self._device, self._listener)
+
+            # Create registration
+            self._registration = self._lib.fn2_create_registration(self._device)
+
+            # Start streaming
+            rc = self._lib.fn2_start(self._device)
+            if rc != 0:
+                logger.error(f"[Linux] Failed to start device {device_index}")
+                return False
+
+            logger.info(f"[Linux] Camera {device_index} opened and streaming")
             return True
         except Exception as e:
             logger.error(f"[Linux] Failed to open camera {device_index}: {e}")
             return False
 
     def get_frames(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-        fn2 = self._fn2
-        # waitForNewFrame takes timeout in ms as a positional argument
-        frames = self._listener.waitForNewFrame(100)
-        if frames is None:
+        if self._lib is None or self._listener is None:
             return None
         try:
-            color_frame = frames[fn2.FrameType.Color]
-            depth_frame = frames[fn2.FrameType.Depth]
+            rc = self._lib.fn2_wait_for_frame(self._listener, 100, self._slot)
+            if rc != 0:
+                return None
 
-            rgb = color_frame.asarray(dtype=np.uint8)[:, :, :3].copy()
+            fd = _Fn2FrameData()
+            rc = self._lib.fn2_get_frame_data(self._listener, self._registration,
+                                               ctypes.byref(fd), self._slot)
+            if rc != 0:
+                self._lib.fn2_release_frame(self._listener, self._slot)
+                return None
 
-            undistorted = fn2.Frame(512, 424, 4)
-            registered  = fn2.Frame(1920, 1080, 4)
-            self._registration.apply(color_frame, depth_frame, undistorted, registered)
-            depth = registered.asarray(dtype=np.float32)[:, :, 0].copy()
+            # Color: BGRX 1920x1080 → BGR
+            color_size = fd.color_width * fd.color_height * 4
+            color_buf = (ctypes.c_uint8 * color_size).from_address(fd.color_data)
+            color_arr = np.frombuffer(color_buf, dtype=np.uint8).reshape(
+                (fd.color_height, fd.color_width, 4))
+            rgb = color_arr[:, :, :3].copy()  # drop alpha, copy before release
+
+            # Bigdepth: 1920x1082 float (depth mapped to color space)
+            # Trim the blank top/bottom rows → 1920x1080
+            if fd.bigdepth_data:
+                bd_size = fd.bigdepth_width * fd.bigdepth_height
+                bd_buf = (ctypes.c_float * bd_size).from_address(fd.bigdepth_data)
+                bigdepth = np.frombuffer(bd_buf, dtype=np.float32).reshape(
+                    (fd.bigdepth_height, fd.bigdepth_width))
+                depth = bigdepth[1:1081, :].copy()  # trim to 1920x1080
+            else:
+                # Fallback: raw 512x424 depth (not registered)
+                d_size = 512 * 424
+                d_buf = (ctypes.c_float * d_size).from_address(fd.depth_data)
+                import cv2
+                depth_raw = np.frombuffer(d_buf, dtype=np.float32).reshape((424, 512)).copy()
+                depth = cv2.resize(depth_raw, (1920, 1080), interpolation=cv2.INTER_NEAREST)
+
+            self._lib.fn2_release_frame(self._listener, self._slot)
             return rgb, depth
-        finally:
-            self._listener.release(frames)
-
-    def close(self):
-        if self._device:
+        except Exception as e:
+            logger.error(f"[Linux] Frame capture error: {e}")
             try:
-                self._device.stop()
-                self._device.close()
+                self._lib.fn2_release_frame(self._listener, self._slot)
             except Exception:
                 pass
-            self._device = None
+            return None
+
+    def close(self):
+        if self._lib is None:
+            return
+        try:
+            if self._device:
+                self._lib.fn2_stop(self._device)
+                self._lib.fn2_close(self._device)
+        except Exception:
+            pass
+        try:
+            self._lib.fn2_cleanup_slot(self._slot)
+        except Exception:
+            pass
+        try:
+            if self._registration:
+                self._lib.fn2_destroy_registration(self._registration)
+        except Exception:
+            pass
+        try:
+            if self._ctx:
+                self._lib.fn2_destroy(self._ctx)
+        except Exception:
+            pass
+        self._device = None
+        self._listener = None
+        self._registration = None
+        self._ctx = None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -223,7 +375,17 @@ class LinuxFreenectV1Backend(KinectBackend):
                 return 0
             count = freenect.num_devices(ctx)
             freenect.shutdown(ctx)
-            return count
+            if count > 0:
+                return count
+            # freenect.num_devices() is unreliable — fallback to USB detection
+            # Kinect v1 camera is USB 045e:02ae
+            import subprocess
+            result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
+            usb_count = result.stdout.count("045e:02ae")
+            if usb_count > 0:
+                logger.debug(f"freenect.num_devices()=0 but found {usb_count} Kinect v1 via USB")
+                return usb_count
+            return 0
         except ImportError:
             logger.debug("freenect not installed (pip install freenect)")
             return 0
