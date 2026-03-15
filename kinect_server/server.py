@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-kinect_server/server.py — FBT Linux server entry point.
+kinect_server/server.py — FBT server entry point.
 Orchestrates camera capture, multi-camera fusion, and OSC output.
+Supports Kinect v1 (Xbox 360) and v2 (Xbox One), including mixed setups.
 """
 import argparse
 import logging
 import sys
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 
-from camera import KinectCamera, enumerate_kinect_devices
+from camera import KinectCamera, CameraFrame, enumerate_kinect_devices
 from calibration import build_default_calibration, load_calibration, run_calibration
 from fusion import MultiCameraFusion
 from osc_output import OSCOutput
@@ -23,9 +24,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Frame cache staleness TTL (seconds)
+FRAME_CACHE_TTL = 0.15  # 150ms — use cached frame if fresh enough
+
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Kinect v2 FBT server for VRChat via OSC")
+    p = argparse.ArgumentParser(description="Kinect FBT server for VRChat via OSC")
     p.add_argument("--num-cameras", type=int, default=None,
                    help="Number of Kinect devices (auto-detect if omitted)")
     p.add_argument("--target-ip", type=str, default="192.168.1.100",
@@ -36,6 +40,9 @@ def parse_args():
                    help="Target FPS for OSC output")
     p.add_argument("--user-height", type=float, default=1.7,
                    help="User height in meters (default 1.7)")
+    p.add_argument("--layout", type=str, default="auto", choices=["arc", "facing", "auto"],
+                   help="Camera layout for default calibration: 'arc' (semicircle), "
+                        "'facing' (2 cameras on opposite walls), or 'auto' (facing if 2 cams, arc otherwise)")
     p.add_argument("--calibrate", action="store_true",
                    help="Run calibration mode and exit")
     p.add_argument("--calibration-file", type=str, default="calibration.json",
@@ -75,16 +82,24 @@ def main():
             cam.stop()
         sys.exit(0)
 
+    # Determine layout for default calibration
+    layout = args.layout
+    if layout == "auto":
+        layout = "facing" if num_cameras == 2 else "arc"
+
     # Load or build calibration
     calibration = load_calibration(args.calibration_file)
     if calibration is None:
-        calibration = build_default_calibration(num_cameras)
+        calibration = build_default_calibration(num_cameras, layout=layout)
 
     # Init fusion
     fusion = MultiCameraFusion(calibration, user_height=args.user_height)
 
     # Init OSC
     osc = OSCOutput(args.target_ip, args.target_port, dry_run=args.dry_run)
+
+    # Frame cache: store last frame per camera with timestamp for staleness TTL
+    frame_cache: Dict[int, CameraFrame] = {}
 
     # Shared state for debug server
     state: Dict = {
@@ -107,26 +122,36 @@ def main():
     fps_time = time.monotonic()
 
     logger.info(f"FBT server running at {args.fps}fps → {args.target_ip}:{args.target_port}")
+    logger.info(f"Layout: {layout}")
     if args.dry_run:
         logger.info("DRY RUN: OSC messages printed to stdout")
 
     try:
         while True:
             t_start = time.monotonic()
+            now = time.monotonic()
 
-            # Collect latest frames from all cameras
-            frames = []
+            # Collect latest frames from all cameras, using cache if unavailable
+            frames_to_fuse: List[CameraFrame] = []
             for cam in cameras:
                 f = cam.get_frame(timeout=frame_interval * 0.5)
                 if f is not None:
-                    frames.append(f)
+                    # Update cache with fresh frame
+                    frame_cache[cam.device_index] = f
+                    frames_to_fuse.append(f)
+                elif cam.device_index in frame_cache:
+                    # Use cached frame if not too stale
+                    cached = frame_cache[cam.device_index]
+                    age = now - cached.timestamp
+                    if age < FRAME_CACHE_TTL:
+                        frames_to_fuse.append(cached)
 
-            cameras_active = len(frames)
+            cameras_active = len(frames_to_fuse)
             state["cameras_active"] = cameras_active
 
-            if frames:
+            if frames_to_fuse:
                 # Fuse joints
-                joints = fusion.update(frames)
+                joints = fusion.update(frames_to_fuse)
                 state["joints"] = joints
                 state["joints_tracked"] = fusion.joints_tracked_count()
 

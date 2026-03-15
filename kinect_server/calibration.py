@@ -18,14 +18,22 @@ SQUARE_SIZE_MM = 25.0
 NUM_FRAMES = 30
 
 
-def build_default_calibration(num_cameras: int) -> Dict[int, np.ndarray]:
+def build_default_calibration(num_cameras: int, layout: str = "arc") -> Dict[int, np.ndarray]:
     """
-    Apply evenly-spaced yaw offsets for a horizontal arc arrangement.
-    This is a ROUGH default — prints a loud warning.
+    Build default calibration for a given camera layout.
+
+    Args:
+        num_cameras: Number of cameras
+        layout: Camera arrangement type
+            - "arc": Cameras spread in a 180-degree arc (default for 3+ cameras)
+            - "facing": Two cameras on opposite walls facing inward (good for 2 cameras)
+
+    Returns:
+        Dict mapping camera_id -> 4x4 transform matrix (camera-to-world)
     """
     logger.warning("=" * 60)
     logger.warning("WARNING: No calibration.json found!")
-    logger.warning("Using DEFAULT arc-arrangement calibration.")
+    logger.warning(f"Using DEFAULT {layout}-arrangement calibration.")
     logger.warning("Tracking accuracy will be SIGNIFICANTLY WORSE.")
     logger.warning("Run with --calibrate to perform proper calibration.")
     logger.warning("=" * 60)
@@ -33,9 +41,33 @@ def build_default_calibration(num_cameras: int) -> Dict[int, np.ndarray]:
     calibration = {}
     if num_cameras == 1:
         calibration[0] = np.eye(4)
+
+    elif layout == "facing" and num_cameras == 2:
+        # Two cameras on opposite walls facing each other
+        # Camera 0: at z = -2m, facing +Z (toward origin)
+        # Camera 1: at z = +2m, facing -Z (toward origin), rotated 180° around Y
+        radius = 2.0
+
+        # Camera 0: identity position at -Z, facing +Z
+        calibration[0] = np.eye(4)
+        calibration[0][2, 3] = -radius  # position at z = -2m
+
+        # Camera 1: at +Z, rotated 180° around Y (facing -Z)
+        yaw = math.pi  # 180 degrees
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        R = np.array([
+            [cy, 0, sy],
+            [0, 1, 0],
+            [-sy, 0, cy],
+        ])
+        mat = np.eye(4)
+        mat[:3, :3] = R
+        mat[:3, 3] = np.array([0.0, 0.0, radius])  # position at z = +2m
+        calibration[1] = mat
+
     else:
-        # Spread cameras in a 180-degree arc
-        angle_step = math.pi / (num_cameras - 1)
+        # Arc arrangement: cameras spread in a 180-degree arc
+        angle_step = math.pi / max(1, num_cameras - 1)
         radius = 2.0  # assume 2m radius
         for i in range(num_cameras):
             angle = -math.pi / 2 + i * angle_step
@@ -152,25 +184,53 @@ def run_calibration(cameras, filepath: str = "calibration.json"):
     calibration = {0: np.eye(4)}
 
     cam0_idx = cameras[0].device_index
-    # Image size (downsampled)
+
+    # Get per-camera intrinsics from captured frames
+    # Store intrinsics per camera (keyed by device_index)
+    cam_intrinsics: Dict[int, Dict] = {}
+    for frame in frames:
+        if frame.device_info is not None:
+            info = frame.device_info
+            cam_intrinsics[frame.camera_id] = {
+                "fx": info.fx, "fy": info.fy,
+                "cx": info.cx, "cy": info.cy,
+                "width": info.width, "height": info.height,
+            }
+
+    # Default to v2 intrinsics if not available
+    def get_cam_K(cam_id: int, downsample_w: int, downsample_h: int) -> np.ndarray:
+        if cam_id in cam_intrinsics:
+            info = cam_intrinsics[cam_id]
+            scale_x = downsample_w / info["width"]
+            scale_y = downsample_h / info["height"]
+            fx = info["fx"] * scale_x
+            fy = info["fy"] * scale_y
+            cx = info["cx"] * scale_x
+            cy = info["cy"] * scale_y
+        else:
+            # Fallback to v2 intrinsics scaled to 960x540
+            fx = 1081.37 * (downsample_w / 1920)
+            fy = 1081.37 * (downsample_h / 1080)
+            cx = 959.5 * (downsample_w / 1920)
+            cy = 539.5 * (downsample_h / 1080)
+        return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+
+    # Downsampled image size used for checkerboard detection
     img_size = (960, 540)
-    # Approximate intrinsics for downsampled image
-    fx = 1081.37 * (960 / 1920)
-    fy = 1081.37 * (540 / 1080)
-    cx = 959.5 * (960 / 1920)
-    cy = 539.5 * (540 / 1080)
-    K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
     dist = np.zeros(5)
 
     for cam in cameras[1:]:
         cam_idx = cam.device_index
         try:
-            ret, K1, d1, K2, d2, R, T, E, F = cv2.stereoCalibrate(
+            K0 = get_cam_K(cam0_idx, img_size[0], img_size[1])
+            K1 = get_cam_K(cam_idx, img_size[0], img_size[1])
+
+            ret, K0_out, d0, K1_out, d1, R, T, E, F = cv2.stereoCalibrate(
                 all_obj_pts,
                 all_img_pts[cam0_idx],
                 all_img_pts[cam_idx],
-                K.copy(), dist.copy(),
-                K.copy(), dist.copy(),
+                K0.copy(), dist.copy(),
+                K1.copy(), dist.copy(),
                 img_size,
                 flags=cv2.CALIB_FIX_INTRINSIC,
             )

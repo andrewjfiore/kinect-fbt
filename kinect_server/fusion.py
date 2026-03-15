@@ -93,8 +93,11 @@ class MultiCameraFusion:
                 pos, w = obs[0]
                 confidence = min(w, 1.0)
             else:
-                total_w = sum(w for _, w in obs)
-                pos = sum(w * p for p, w in obs) / total_w
+                # Weighted average using numpy (avoids sum() starting from int 0)
+                positions = np.array([p for p, _ in obs])
+                weights = np.array([w for _, w in obs])
+                total_w = weights.sum()
+                pos = np.average(positions, axis=0, weights=weights)
                 confidence = min(total_w / len(obs), 1.0)
 
             # Apply 1-euro filter

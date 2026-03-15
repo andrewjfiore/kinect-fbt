@@ -37,20 +37,32 @@ class OneEuroFilter:
     min_cutoff: minimum cutoff frequency (Hz) — controls lag at low speeds
     beta: speed coefficient — controls lag at high speeds
     d_cutoff: cutoff for derivative (typically 1.0 Hz)
+
+    Reference: Casiez et al. 2012, "1€ Filter"
+    Formula: alpha = (2*pi*fc*te) / (2*pi*fc*te + 1)
+    where fc = cutoff frequency, te = sample period (dt)
     """
 
     def __init__(self, min_cutoff: float = 1.0, beta: float = 0.1, d_cutoff: float = 1.0):
         self.min_cutoff = min_cutoff
         self.beta = beta
         self.d_cutoff = d_cutoff
-        self._x = LowPassFilter(self._alpha(min_cutoff))
-        self._dx = LowPassFilter(self._alpha(d_cutoff))
+        # Initialize with a reasonable default dt (will be updated on first filter call)
+        default_dt = 1.0 / 30.0  # assume 30fps initially
+        self._x = LowPassFilter(self._alpha(min_cutoff, default_dt))
+        self._dx = LowPassFilter(self._alpha(d_cutoff, default_dt))
         self._last_time = None
 
-    def _alpha(self, cutoff: float) -> float:
-        te = 1.0 / max(cutoff, 1e-10)
-        tau = 1.0 / (2 * math.pi * cutoff)
-        return 1.0 / (1.0 + tau / te)
+    def _alpha(self, cutoff: float, dt: float) -> float:
+        """Compute smoothing factor alpha from cutoff frequency and sample period.
+
+        Correct 1-euro formula: alpha = (2*pi*fc*te) / (2*pi*fc*te + 1)
+        where fc = cutoff frequency (Hz), te = sample period (seconds)
+        """
+        te = max(dt, 1e-10)  # sample period (avoid division by zero)
+        fc = max(cutoff, 1e-10)  # cutoff frequency
+        r = 2.0 * math.pi * fc * te
+        return r / (r + 1.0)
 
     def filter(self, value: float, timestamp: float = None) -> float:
         if timestamp is None:
@@ -68,11 +80,11 @@ class OneEuroFilter:
 
         # Derivative
         dx = (value - (self._x.last_value or value)) / dt
-        edx = self._dx.filter(dx, alpha=self._alpha(self.d_cutoff))
+        edx = self._dx.filter(dx, alpha=self._alpha(self.d_cutoff, dt))
 
         # Adaptive cutoff
         cutoff = self.min_cutoff + self.beta * abs(edx)
-        return self._x.filter(value, alpha=self._alpha(cutoff))
+        return self._x.filter(value, alpha=self._alpha(cutoff, dt))
 
 
 class OneEuroFilter3D:

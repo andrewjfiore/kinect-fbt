@@ -1,9 +1,14 @@
 # kinect-fbt
 
-Full-body tracking (FBT) system for Meta Quest 3 + VRChat using one or more Kinect v2 sensors.
+Full-body tracking (FBT) system for Meta Quest 3 + VRChat using Kinect sensors.
+
+**Supported Kinects:**
+- **Kinect v2** (Xbox One) — 1920x1080 RGB, 512x424 depth, 0.5-4.5m range
+- **Kinect v1** (Xbox 360) — 640x480 RGB, 640x480 depth, 0.5-4.0m range
+- **Mixed setups** — e.g., one v1 on front wall + one v2 on back wall
 
 **Architecture:**
-- **Linux server** (`kinect_server/`): reads RGB+depth from N Kinect v2 devices, fuses 3D skeleton joints across cameras, streams tracker data via OSC/UDP
+- **Linux server** (`kinect_server/`): reads RGB+depth from N Kinect devices, fuses 3D skeleton joints across cameras, streams tracker data via OSC/UDP
 - **Quest APK** (`quest_app/`): receives fused tracker data, forwards VRChat-compatible OSC to `127.0.0.1:9000`
 
 ---
@@ -12,19 +17,20 @@ Full-body tracking (FBT) system for Meta Quest 3 + VRChat using one or more Kine
 
 | Item | Notes |
 |------|-------|
-| Kinect for Xbox One (v2) | 1–8 units supported |
-| USB 3.0 host controllers | **One per Kinect** — not just ports. Use a PCIe USB 3.0 card for >2 Kinects |
-| Linux host (Ubuntu 20.04+) | Tested on Ubuntu 22.04 |
+| Kinect for Xbox One (v2) | 1–8 units supported, best quality |
+| Kinect for Xbox 360 (v1) | 1–4 units, lower resolution but works |
+| USB 3.0 host controllers | **One per Kinect v2** — v1 works on USB 2.0 |
+| Linux host (Ubuntu 20.04+) | Tested on Ubuntu 22.04; Windows partial support |
 | Meta Quest 3 | Developer mode required |
 | Wi-Fi LAN | Quest and Linux host on the same network |
 
-> **Critical:** Each Kinect v2 needs its own USB 3.0 host controller, not just a separate port on a shared hub. A PCIe USB 3.0 card (e.g. Inateck KT4004) provides 4 independent controllers and is recommended for 3–4 Kinects.
+> **Critical:** Each Kinect v2 needs its own USB 3.0 host controller, not just a separate port on a shared hub. A PCIe USB 3.0 card (e.g. Inateck KT4004) provides 4 independent controllers and is recommended for 3–4 Kinects. Kinect v1 is less demanding and works on shared USB 2.0 hubs.
 
 ---
 
 ## 2. Linux Setup
 
-### Build libfreenect2 from source
+### Build libfreenect2 from source (for Kinect v2)
 
 ```bash
 sudo apt-get install -y build-essential cmake pkg-config \
@@ -38,6 +44,16 @@ cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local
 make -j$(nproc)
 sudo make install
 sudo ldconfig
+```
+
+### Install libfreenect (for Kinect v1)
+
+```bash
+# Install libfreenect for Kinect v1 (Xbox 360) support
+sudo apt-get install -y libfreenect-dev freenect
+
+# Python bindings
+pip install freenect
 ```
 
 ### Install udev rules
@@ -57,8 +73,15 @@ sudo usermod -a -G plugdev $USER
 lsusb | grep -i "045e:02d8\|045e:02c4"
 # Should show something like: Bus 002 Device 003: ID 045e:02d8 Microsoft Corp.
 
-# Quick test with libfreenect2 examples (optional)
+# Connect a Kinect v1 via USB 2.0 or 3.0
+lsusb | grep -i "045e:02ae"
+# Should show: ID 045e:02ae Microsoft Corp. Xbox NUI Camera
+
+# Quick test with libfreenect2 examples (v2)
 ~/libfreenect2/build/bin/Protonect
+
+# Quick test with freenect (v1)
+freenect-glview
 ```
 
 ### Install Python dependencies
@@ -70,7 +93,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-> **Note:** pylibfreenect2 requires libfreenect2 already installed. If using OpenGL pipeline, ensure OpenGL is available (`sudo apt install libgl1`).
+> **Note:** pylibfreenect2 requires libfreenect2 already installed. If using OpenGL pipeline, ensure OpenGL is available (`sudo apt install libgl1`). The freenect package for Kinect v1 is simpler to install.
 
 ---
 
@@ -87,7 +110,52 @@ For 2+ Kinects:
 
 ---
 
-## 4. Camera Calibration
+## 4. Camera Layouts
+
+### Arc layout (default for 3+ cameras)
+
+Cameras arranged in a semicircle around the tracking volume, all facing inward. Best for 360° coverage.
+
+```
+        [Cam 1]
+       /      \
+   [Cam 0]  [Cam 2]
+       \      /
+         User
+```
+
+### Facing layout (for 2 cameras)
+
+Two cameras on opposite walls, facing each other. Good for narrow rooms or limited hardware.
+
+```
+   [Camera 0]  ← front wall
+        |
+       User
+        |
+   [Camera 1]  ← back wall (180° rotated)
+```
+
+Use `--layout facing` for this arrangement:
+```bash
+python server.py --layout facing --target-ip <quest-ip>
+```
+
+### Mixed v1+v2 setups
+
+You can mix Kinect v1 and v2 sensors. The server auto-detects device types:
+- v2 devices are indexed first (0, 1, ...)
+- v1 devices follow (continuing from where v2 ends)
+
+Example with 1 v2 + 1 v1:
+- Camera 0: Kinect v2 (1920x1080)
+- Camera 1: Kinect v1 (640x480)
+
+Per-camera intrinsics are handled automatically.
+
+---
+
+## 5. Camera Calibration
 
 ### Print checkerboard
 
@@ -130,7 +198,7 @@ for k, v in c.items():
 
 ---
 
-## 5. Network Configuration
+## 6. Network Configuration
 
 All devices must be on the same LAN.
 
@@ -152,7 +220,7 @@ sudo ufw allow 8090/tcp    # HTTP debug server (optional)
 
 ---
 
-## 6. Quest Setup
+## 7. Quest Setup
 
 ### Enable Developer Mode
 
@@ -191,7 +259,7 @@ bash install.sh     # Install via adb
 
 ---
 
-## 7. VRChat Setup
+## 8. VRChat Setup
 
 ### Enable OSC
 
@@ -210,7 +278,7 @@ bash install.sh     # Install via adb
 
 ---
 
-## 8. Running
+## 9. Running
 
 ### Start Linux server
 
@@ -218,8 +286,11 @@ bash install.sh     # Install via adb
 cd kinect_server
 source venv/bin/activate
 
-# Basic (auto-detect cameras)
+# Basic (auto-detect cameras and layout)
 python server.py --target-ip 192.168.1.50
+
+# Two cameras on opposite walls (facing layout)
+python server.py --target-ip 192.168.1.50 --layout facing
 
 # Full options
 python server.py \
@@ -228,12 +299,28 @@ python server.py \
   --target-port 39571 \
   --fps 20 \
   --user-height 1.75 \
+  --layout facing \
   --calibration-file calibration.json \
   --debug-server
 
 # Dry run (no Quest needed, prints OSC to stdout)
 python server.py --target-ip 192.168.1.50 --dry-run
 ```
+
+### Command-line options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--num-cameras` | auto | Number of cameras (auto-detects v1 and v2) |
+| `--target-ip` | 192.168.1.100 | Quest IP address |
+| `--target-port` | 39571 | OSC UDP port |
+| `--fps` | 20 | Target frames per second |
+| `--user-height` | 1.7 | User height in meters |
+| `--layout` | auto | Camera layout: `arc`, `facing`, or `auto` |
+| `--calibration-file` | calibration.json | Path to calibration file |
+| `--calibrate` | - | Run calibration mode and exit |
+| `--debug-server` | - | Enable HTTP debug server on port 8090 |
+| `--dry-run` | - | Print OSC to stdout instead of UDP |
 
 ### Debug web UI
 
@@ -245,13 +332,16 @@ When `--debug-server` is enabled:
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 ### Kinect not found
 - Check USB with `lsusb | grep 045e`
+  - v2: `045e:02d8` or `045e:02c4`
+  - v1: `045e:02ae`
 - Verify udev rules: `ls -la /dev/bus/usb` — check permissions
 - Ensure user is in `plugdev` group (`groups $USER`)
-- Try different USB 3.0 port/controller
+- Try different USB 3.0 port/controller (v2 requires USB 3.0)
+- For v1: ensure libfreenect is installed (`freenect-glview` should work)
 
 ### Depth values all zero
 - libfreenect2 pipeline issue: try `CpuPacketPipeline` (add `--pipeline cpu` if implemented) or reinstall with CUDA support

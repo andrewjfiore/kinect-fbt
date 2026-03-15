@@ -1,6 +1,7 @@
 """
 KinectCamera: per-device capture + depth-informed landmark extraction.
-Uses pylibfreenect2 for Kinect v2 capture and MediaPipe Pose for 2D landmarks.
+Supports both Kinect v1 (640x480) and v2 (1920x1080) with per-camera intrinsics.
+Uses MediaPipe Pose for 2D landmarks.
 """
 import logging
 import queue
@@ -12,20 +13,24 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
+from platform_backend import (
+    DeviceInfo, get_v2_device_info, get_synthetic_device_info,
+    create_backend_for_device, DEVICE_TYPE_V1, DEVICE_TYPE_V2,
+    V2_FX, V2_FY, V2_CX, V2_CY, V2_DEPTH_MIN_MM, V2_DEPTH_MAX_MM,
+)
+
 logger = logging.getLogger(__name__)
 
 # Platform backend factory — can be overridden by GUI or tests
 PLATFORM_BACKEND_FACTORY = None
 
-# Kinect v2 color camera intrinsics (hardcoded standard values)
-FX = 1081.37
-FY = 1081.37
-CX = 959.5
-CY = 539.5
-
-# Depth validity range (mm)
-DEPTH_MIN_MM = 500
-DEPTH_MAX_MM = 4500
+# Legacy constants for backward compatibility (v2 defaults)
+FX = V2_FX
+FY = V2_FY
+CX = V2_CX
+CY = V2_CY
+DEPTH_MIN_MM = V2_DEPTH_MIN_MM
+DEPTH_MAX_MM = V2_DEPTH_MAX_MM
 
 # MediaPipe landmark count
 NUM_LANDMARKS = 33
@@ -59,19 +64,28 @@ class CameraFrame:
     landmarks: List[Optional[Landmark3D]]  # 33 entries, None if not visible
     timestamp: float
     rgb_preview: Optional[np.ndarray] = None  # full-res for MJPEG
+    device_info: Optional[DeviceInfo] = None  # per-camera intrinsics and metadata
 
 
 class KinectCamera:
     """
-    Manages a single Kinect v2 device.
+    Manages a single Kinect device (v1 or v2).
     Runs capture + MediaPipe extraction in a background thread,
     exposes latest frame via a queue.
     """
 
-    def __init__(self, device_index: int, fps_target: int = 20):
+    def __init__(self, device_index: int, fps_target: int = 20, device_type: str = None):
+        """
+        Args:
+            device_index: Camera index
+            fps_target: Target frames per second
+            device_type: Force device type ("v1", "v2") or None for auto-detect
+        """
         self.device_index = device_index
         self.fps_target = fps_target
         self.frame_interval = 1.0 / fps_target
+        self._device_type = device_type  # None = auto-detect
+        self._device_info: Optional[DeviceInfo] = None
         self._frame_queue: queue.Queue = queue.Queue(maxsize=2)
         self._running = False
         self._thread = None
@@ -82,6 +96,11 @@ class KinectCamera:
         self._fps = 0.0
         self._frame_count = 0
         self._fps_time = time.monotonic()
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device intrinsics (available after start())."""
+        return self._device_info or get_v2_device_info()
 
     def start(self):
         import threading
@@ -218,12 +237,6 @@ class KinectCamera:
             self._mp_pose.close()
 
     def _capture_frame(self, has_kinect: bool) -> Optional[CameraFrame]:
-        if has_kinect:
-            return self._capture_kinect_frame()
-        else:
-            return self._capture_synthetic_frame()
-
-    def _capture_frame(self, has_kinect: bool) -> Optional[CameraFrame]:
         if hasattr(self, '_use_platform_backend') and self._use_platform_backend:
             return self._capture_platform_frame()
         if has_kinect:
@@ -236,6 +249,9 @@ class KinectCamera:
         if result is None:
             return None
         rgb_full, depth_registered = result
+        # Get device info from backend
+        if self._device_info is None:
+            self._device_info = self._platform_backend.get_device_info()
         return self._process_frame(rgb_full, depth_registered)
 
     def _capture_kinect_frame(self) -> Optional[CameraFrame]:
@@ -263,16 +279,27 @@ class KinectCamera:
         finally:
             self._listener.release(frames)
 
+        # pylibfreenect2 is v2 only
+        if self._device_info is None:
+            self._device_info = get_v2_device_info()
         return self._process_frame(rgb_full, depth_registered)
 
     def _capture_synthetic_frame(self) -> Optional[CameraFrame]:
         """Synthetic data for testing without Kinect hardware."""
-        rgb_full = np.zeros((1080, 1920, 3), dtype=np.uint8)
-        depth_registered = np.ones((1080, 1920), dtype=np.float32) * 2000.0
+        # Use device_info resolution or default to v2
+        if self._device_info is None:
+            self._device_info = get_synthetic_device_info()
+        info = self._device_info
+        rgb_full = np.zeros((info.height, info.width, 3), dtype=np.uint8)
+        depth_registered = np.ones((info.height, info.width), dtype=np.float32) * 2000.0
         return self._process_frame(rgb_full, depth_registered)
 
     def _process_frame(self, rgb_full: np.ndarray, depth_registered: np.ndarray) -> CameraFrame:
-        # Downsample to 640x480 for MediaPipe
+        # Use per-camera intrinsics or defaults
+        info = self._device_info or get_v2_device_info()
+        fx, fy, cx, cy = info.fx, info.fy, info.cx, info.cy
+
+        # Downsample to 640x480 for MediaPipe (regardless of input resolution)
         rgb_small = cv2.resize(rgb_full, (640, 480))
         rgb_mp = cv2.cvtColor(rgb_small, cv2.COLOR_BGR2RGB)
 
@@ -282,7 +309,6 @@ class KinectCamera:
 
         if results.pose_landmarks:
             h_full, w_full = rgb_full.shape[:2]
-            h_small, w_small = rgb_small.shape[:2]
 
             for idx, lm in enumerate(results.pose_landmarks.landmark):
                 if lm.visibility < 0.5:
@@ -294,18 +320,18 @@ class KinectCamera:
                 px = max(0, min(px, w_full - 1))
                 py = max(0, min(py, h_full - 1))
 
-                depth_mm, depth_confidence = self._lookup_depth(depth_registered, px, py)
+                depth_mm, depth_confidence = self._lookup_depth(depth_registered, px, py, info)
 
                 if depth_confidence > 0:
-                    x_m = (px - CX) * depth_mm / (FX * 1000.0)
-                    y_m = (py - CY) * depth_mm / (FY * 1000.0)
+                    # Use per-camera intrinsics for 3D projection
+                    x_m = (px - cx) * depth_mm / (fx * 1000.0)
+                    y_m = (py - cy) * depth_mm / (fy * 1000.0)
                     z_m = depth_mm / 1000.0
                 else:
                     # Monocular fallback using MediaPipe's Z estimate
-                    # MediaPipe z is relative to hip, scale rough
                     z_m = abs(lm.z) * 2.0  # rough scale
-                    x_m = (px - CX) * z_m / (FX / 1000.0)
-                    y_m = (py - CY) * z_m / (FY / 1000.0)
+                    x_m = (px - cx) * z_m / (fx / 1000.0)
+                    y_m = (py - cy) * z_m / (fy / 1000.0)
                     depth_confidence = 0.1
 
                 landmarks_3d[idx] = Landmark3D(
@@ -316,19 +342,25 @@ class KinectCamera:
                 )
 
             # Draw skeleton overlay on full-res preview
-            self._draw_skeleton(rgb_full, landmarks_3d)
+            self._draw_skeleton(rgb_full, landmarks_3d, info)
 
         return CameraFrame(
             camera_id=self.device_index,
             landmarks=landmarks_3d,
             timestamp=time.monotonic(),
             rgb_preview=rgb_full,
+            device_info=info,
         )
 
-    def _lookup_depth(self, depth_map: np.ndarray, px: int, py: int) -> Tuple[float, float]:
+    def _lookup_depth(self, depth_map: np.ndarray, px: int, py: int,
+                       info: DeviceInfo) -> Tuple[float, float]:
+        """Look up depth value at pixel with neighborhood search fallback."""
         h, w = depth_map.shape
+        depth_min = info.depth_min_mm
+        depth_max = info.depth_max_mm
+
         d = depth_map[py, px]
-        if DEPTH_MIN_MM <= d <= DEPTH_MAX_MM:
+        if depth_min <= d <= depth_max:
             return float(d), 1.0
 
         # 5x5 neighborhood search
@@ -338,18 +370,22 @@ class KinectCamera:
                     nx, ny = px + dx, py + dy
                     if 0 <= nx < w and 0 <= ny < h:
                         nd = depth_map[ny, nx]
-                        if DEPTH_MIN_MM <= nd <= DEPTH_MAX_MM:
+                        if depth_min <= nd <= depth_max:
                             return float(nd), 0.5
 
         return 0.0, 0.0
 
-    def _draw_skeleton(self, img: np.ndarray, landmarks: List[Optional[Landmark3D]]):
+    def _draw_skeleton(self, img: np.ndarray, landmarks: List[Optional[Landmark3D]],
+                       info: DeviceInfo):
+        """Draw skeleton overlay using per-camera intrinsics."""
+        fx, fy, cx, cy = info.fx, info.fy, info.cx, info.cy
         for lm in landmarks:
             if lm is None:
                 continue
             h, w = img.shape[:2]
-            px = int((lm.x * FX / (lm.z if lm.z > 0 else 1) + CX))
-            py = int((lm.y * FY / (lm.z if lm.z > 0 else 1) + CY))
+            z = lm.z if lm.z > 0 else 1
+            px = int(lm.x * fx / z + cx)
+            py = int(lm.y * fy / z + cy)
             px = max(0, min(px, w - 1))
             py = max(0, min(py, h - 1))
             if lm.depth_confidence >= 0.9:
@@ -362,17 +398,17 @@ class KinectCamera:
 
 
 def enumerate_kinect_devices() -> int:
-    """Return the number of connected Kinect v2 devices."""
+    """Return the total number of connected Kinect devices (v1 + v2)."""
+    from platform_backend import count_devices, count_devices_by_type
     try:
-        import pylibfreenect2 as fn2
-        fn2.setGlobalLogger(fn2.createConsoleLogger(fn2.LoggerLevel.Warning))
-        freenect = fn2.Freenect2()
-        count = freenect.enumerateDevices()
-        logger.info(f"Found {count} Kinect v2 device(s)")
-        return count
-    except ImportError:
-        logger.warning("pylibfreenect2 not available — defaulting to 1 synthetic camera")
-        return 1
+        total = count_devices()
+        v2, v1 = count_devices_by_type()
+        if v1 > 0 or v2 > 0:
+            logger.info(f"Found {total} Kinect device(s): {v2} v2, {v1} v1")
+        else:
+            logger.warning("No Kinect hardware found — defaulting to 1 synthetic camera")
+            return 1
+        return total
     except Exception as e:
         logger.error(f"Error enumerating Kinect devices: {e}")
-        return 0
+        return 1
