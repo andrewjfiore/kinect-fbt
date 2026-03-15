@@ -15,6 +15,10 @@ Full-body tracking (FBT) system for Meta Quest 3 + VRChat using Kinect sensors.
 - **Kinect v1 + v2 support** — mix and match Xbox 360 Kinect (v1) and Xbox One Kinect (v2) sensors
 - **Arbitrary camera placement** — cameras can be placed anywhere (opposing walls, 360° around room)
 - **Multiple calibration modes** — checkerboard (pairwise), manual position entry, T-pose auto-calibration
+- **Live camera feed preview** — real-time RGB feeds with skeleton overlay in the GUI
+- **Multi-body detection** — detect and select which person to track when multiple people are visible
+- **Variable capture rate** — adjustable 10–60 Hz slider, changeable at runtime without restart
+- **Pre-built releases** — download Windows (.exe) or Linux binaries from GitHub Releases
 
 ---
 
@@ -396,6 +400,96 @@ When `--debug-server` is enabled:
 - Ensure Kinect has stable USB connection (USB 3.0, no extension cables)
 - Check lighting: Kinect IR depth fails in bright sunlight
 - Reduce camera distance to subject (best 1.5–3m)
+
+---
+
+---
+
+## 10. GUI Features
+
+### Live Camera Feed Preview
+
+The GUI shows a real-time preview of each connected Kinect's RGB feed at ~15 FPS. Each feed panel displays:
+- **Camera ID** and current **FPS**
+- **Skeleton overlay** with color-coded joint confidence:
+  - 🟢 Green = high confidence (>0.7)
+  - 🟡 Yellow = medium confidence (0.3–0.7)
+  - 🔴 Red = low confidence (<0.3)
+- **Limb connections** drawn between joints (shoulders→elbows→wrists, hips→knees→ankles)
+- Feed is resized to 480×270 per camera for efficiency
+
+### Multi-Body Detection & Selection
+
+When multiple people are visible in the camera frame:
+- **Bounding boxes** are drawn around each detected person with labels ("Body 1", "Body 2", etc.)
+- The **selected body** is highlighted with a green box; others are shown in blue
+- **Auto-select** defaults to the person closest to the center of the frame
+- **Click-to-select**: click on a bounding box in the preview to switch which body is tracked
+- **Dropdown**: use the body selector dropdown on each camera feed to choose manually
+- Selection persists until changed or the tracked body is lost (then auto-selects nearest)
+
+> **Note:** MediaPipe Pose tracks one person at a time. Multi-body detection uses OpenCV's HOG person detector for bounding boxes; the selected body's region is fed to MediaPipe for skeleton tracking.
+
+### Variable Capture Rate (10–60 Hz)
+
+- The **Capture Rate slider** in Settings adjusts the fusion loop frequency from 10 to 60 Hz
+- Default is **20 Hz** (sufficient for VRChat FBT, good CPU/accuracy balance)
+- Changes take effect **immediately** — no server restart needed
+- The Status card shows **actual FPS vs target FPS** with color coding:
+  - 🟢 Green = within 90% of target
+  - 🟡 Yellow = 70–90% of target
+  - 🔴 Red = below 70% (CPU may be overloaded)
+
+---
+
+## 11. Building from Source
+
+### Prerequisites
+
+- Python 3.10+
+- PyInstaller 6+
+- All runtime dependencies (mediapipe, opencv-python, etc.)
+
+### Windows Build
+
+```bash
+cd kinect-fbt
+pip install -r packaging/windows/requirements-windows.txt
+python packaging/windows/build_exe.py
+# Output: dist/FBT-Server/FBT-Server.exe
+```
+
+To create a Windows installer (requires [Inno Setup](https://jrsoftware.org/isinfo.php)):
+```bash
+iscc packaging/windows/installer.iss
+# Output: dist/FBT-Server-Setup-1.0.0.exe
+```
+
+### Linux Build
+
+```bash
+cd kinect-fbt
+pip install mediapipe opencv-python numpy python-osc flask Pillow pyinstaller
+chmod +x packaging/linux/build_linux.sh
+bash packaging/linux/build_linux.sh
+# Output: dist/FBT-Server/FBT-Server (standalone binary)
+# If appimagetool is available: dist/FBT-Server-1.0.0-x86_64.AppImage
+```
+
+---
+
+## 12. Pre-Built Releases
+
+Download pre-built binaries from [GitHub Releases](https://github.com/your-org/kinect-fbt/releases):
+
+| Platform | Format | Notes |
+|----------|--------|-------|
+| Windows | `.zip` (portable) | Extract and run `FBT-Server.exe` |
+| Windows | `.exe` (installer) | Includes Start Menu + Desktop shortcut |
+| Linux | `.tar.gz` (portable) | Extract and run `./FBT-Server` |
+| Linux | `.AppImage` | `chmod +x` and run (if available) |
+
+> **Windows users:** The installer checks for the Kinect for Windows SDK 2.0 runtime. Install it from [Microsoft](https://www.microsoft.com/en-us/download/details.aspx?id=44561) if prompted.
 
 ---
 

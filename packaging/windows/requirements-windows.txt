@@ -1,0 +1,14 @@
+# FBT Server — Windows-specific dependencies
+# Base requirements (same as Linux)
+mediapipe>=0.10.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+python-osc>=1.8.0
+flask>=3.0.0
+Pillow>=10.0.0
+
+# Windows-specific: Kinect for Windows SDK v2 bindings
+pykinect2>=0.1.0
+
+# Build tools
+pyinstaller>=6.0.0

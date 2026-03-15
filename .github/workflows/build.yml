@@ -1,0 +1,106 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r packaging/windows/requirements-windows.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller
+        run: python packaging/windows/build_exe.py
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FBT-Server-Windows
+          path: dist/FBT-Server/
+          retention-days: 30
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake pkg-config \
+            libusb-1.0-0-dev libturbojpeg0-dev libglfw3-dev \
+            libopenni2-dev libva-dev libjpeg-dev \
+            python3-tk libgl1-mesa-glx
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install mediapipe opencv-python numpy python-osc flask Pillow pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          chmod +x packaging/linux/build_linux.sh
+          bash packaging/linux/build_linux.sh
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FBT-Server-Linux
+          path: dist/FBT-Server/
+          retention-days: 30
+
+  release:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FBT-Server-Windows
+          path: windows-build/
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FBT-Server-Linux
+          path: linux-build/
+
+      - name: Create archives
+        run: |
+          cd windows-build && zip -r ../FBT-Server-Windows.zip . && cd ..
+          cd linux-build && tar czf ../FBT-Server-Linux.tar.gz . && cd ..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            FBT-Server-Windows.zip
+            FBT-Server-Linux.tar.gz
+          generate_release_notes: true
+          draft: false
+          prerelease: false

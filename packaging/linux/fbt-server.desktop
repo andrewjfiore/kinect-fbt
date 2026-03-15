@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FBT Server
+GenericName=Full-Body Tracking Server
+Comment=Kinect v2 Full-Body Tracking for VRChat
+Exec=FBT-Server
+Icon=fbt-server
+Terminal=false
+Categories=Utility;Game;
+Keywords=kinect;tracking;fbt;vrchat;vr;
+StartupNotify=true

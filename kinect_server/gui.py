@@ -2,7 +2,12 @@
 kinect_server/gui.py — Cross-platform tkinter GUI for the FBT server.
 Works on Windows and Linux. Bundles into a single executable via PyInstaller.
 
-One-click Start/Stop with live status dashboard.
+Features:
+- One-click Start/Stop with live status dashboard
+- Live camera feed previews with skeleton overlay
+- Multi-body detection and selection
+- Variable capture rate slider (10-60 Hz)
+
 References: SlimeVR Server GUI, KinectToVR (K2EX) UI patterns.
 """
 import platform
@@ -13,6 +18,16 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import logging
+from typing import Dict, List, Optional, Tuple
+
+import cv2
+import numpy as np
+
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = None
+    ImageTk = None
 
 IS_WINDOWS = platform.system() == "Windows"
 
@@ -33,16 +48,50 @@ class QueueHandler(logging.Handler):
 # ── Colors ───────────────────────────────────────────────────────────────────
 BG      = "#1e1e2e"
 BG2     = "#2a2a3d"
+BG3     = "#1a1a2a"
 ACCENT  = "#7c3aed"  # purple
 GREEN   = "#22c55e"
 YELLOW  = "#eab308"
 RED     = "#ef4444"
+CYAN    = "#06b6d4"
 TEXT    = "#e2e8f0"
 SUBTEXT = "#94a3b8"
 FONT    = ("Segoe UI" if IS_WINDOWS else "Ubuntu", 10)
 FONT_B  = (FONT[0], 10, "bold")
 FONT_H  = (FONT[0], 13, "bold")
 FONT_SM = (FONT[0], 8)
+
+# ── Skeleton limb connections ────────────────────────────────────────────────
+LIMB_CONNECTIONS = [
+    # Torso
+    (11, 12),  # L shoulder - R shoulder
+    (11, 23),  # L shoulder - L hip
+    (12, 24),  # R shoulder - R hip
+    (23, 24),  # L hip - R hip
+    # Left arm
+    (11, 13),  # L shoulder - L elbow
+    (13, 15),  # L elbow - L wrist
+    # Right arm
+    (12, 14),  # R shoulder - R elbow
+    (14, 16),  # R elbow - R wrist
+    # Left leg
+    (23, 25),  # L hip - L knee
+    (25, 27),  # L knee - L ankle
+    (27, 29),  # L ankle - L heel
+    (27, 31),  # L ankle - L foot index
+    # Right leg
+    (24, 26),  # R hip - R knee
+    (26, 28),  # R knee - R ankle
+    (28, 30),  # R ankle - R heel
+    (28, 32),  # R ankle - R foot index
+    # Head
+    (0, 11),   # Nose - L shoulder (approximation)
+    (0, 12),   # Nose - R shoulder
+]
+
+PREVIEW_W = 480
+PREVIEW_H = 270
+PREVIEW_FPS = 15
 
 
 class StatusDot(tk.Canvas):
@@ -66,6 +115,268 @@ class ConfBar(tk.Canvas):
         self.coords(self._bar, 0, 0, int(self._w * max(0, min(1, value))), 10)
 
 
+# ── Camera Feed Panel ────────────────────────────────────────────────────────
+class CameraFeedPanel(tk.LabelFrame):
+    """Live camera feed preview with skeleton overlay and body selection."""
+
+    def __init__(self, parent, cam_id: int, **kw):
+        super().__init__(parent, text=f"Camera {cam_id}", bg=BG2, fg=TEXT,
+                         font=FONT_B, relief="flat", padx=4, pady=4, **kw)
+        self.cam_id = cam_id
+        self._photo = None
+        self._bodies: List[dict] = []  # detected bodies with bounding boxes
+        self._selected_body: int = 0   # index of selected body
+
+        # Top info bar
+        info = tk.Frame(self, bg=BG2)
+        info.pack(fill="x", pady=(0, 2))
+        self.lbl_cam_id = tk.Label(info, text=f"Cam {cam_id}", font=FONT_SM,
+                                   bg=BG2, fg=CYAN, anchor="w")
+        self.lbl_cam_id.pack(side="left")
+        self.lbl_fps = tk.Label(info, text="0 FPS", font=FONT_SM,
+                                bg=BG2, fg=SUBTEXT, anchor="e")
+        self.lbl_fps.pack(side="right")
+        self.lbl_body = tk.Label(info, text="", font=FONT_SM,
+                                 bg=BG2, fg=YELLOW, anchor="e")
+        self.lbl_body.pack(side="right", padx=(0, 8))
+
+        # Body selector dropdown
+        self.var_body = tk.StringVar(value="Auto (nearest)")
+        self.body_menu = ttk.Combobox(info, textvariable=self.var_body,
+                                      values=["Auto (nearest)"], state="readonly",
+                                      width=16)
+        self.body_menu.pack(side="right", padx=(0, 4))
+        self.body_menu.bind("<<ComboboxSelected>>", self._on_body_select)
+
+        # Canvas for video feed
+        self.canvas = tk.Canvas(self, width=PREVIEW_W, height=PREVIEW_H,
+                                bg="#0a0a14", highlightthickness=0)
+        self.canvas.pack()
+        self.canvas.bind("<Button-1>", self._on_canvas_click)
+
+        # Placeholder text
+        self.canvas.create_text(PREVIEW_W // 2, PREVIEW_H // 2,
+                                text="No feed", fill=SUBTEXT, font=FONT,
+                                tags="placeholder")
+
+    def update_feed(self, rgb_frame: Optional[np.ndarray],
+                    landmarks: Optional[list] = None,
+                    bodies: Optional[List[dict]] = None,
+                    fps: float = 0.0):
+        """Update the camera feed display with optional skeleton overlay."""
+        if Image is None or ImageTk is None:
+            return
+
+        self.lbl_fps.config(text=f"{fps:.0f} FPS")
+
+        if rgb_frame is None:
+            return
+
+        self.canvas.delete("placeholder")
+
+        # Resize to preview dimensions
+        img = cv2.resize(rgb_frame, (PREVIEW_W, PREVIEW_H))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        h_orig, w_orig = rgb_frame.shape[:2]
+        sx = PREVIEW_W / w_orig
+        sy = PREVIEW_H / h_orig
+
+        # Draw body bounding boxes
+        if bodies:
+            self._bodies = bodies
+            body_labels = ["Auto (nearest)"]
+            for i, body in enumerate(bodies):
+                selected = (i == self._selected_body)
+                bbox = body.get("bbox")  # (x1, y1, x2, y2) in original coords
+                if bbox:
+                    x1 = int(bbox[0] * sx)
+                    y1 = int(bbox[1] * sy)
+                    x2 = int(bbox[2] * sx)
+                    y2 = int(bbox[3] * sy)
+                    color = (0, 255, 0) if selected else (100, 100, 255)
+                    thickness = 2 if selected else 1
+                    cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
+                    label = f"Body {i + 1}"
+                    if selected:
+                        label += " (selected)"
+                    cv2.putText(img, label, (x1, y1 - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                    body_labels.append(f"Body {i + 1}")
+
+            self.body_menu["values"] = body_labels
+            self.lbl_body.config(text=f"{len(bodies)} bodies")
+        else:
+            self._bodies = []
+            self.lbl_body.config(text="")
+
+        # Draw skeleton overlay
+        if landmarks:
+            self._draw_skeleton_overlay(img, landmarks, sx, sy, w_orig, h_orig)
+
+        # Convert to PhotoImage
+        pil_img = Image.fromarray(img)
+        self._photo = ImageTk.PhotoImage(pil_img)
+        self.canvas.delete("all")
+        self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
+
+    def _draw_skeleton_overlay(self, img: np.ndarray, landmarks: list,
+                               sx: float, sy: float,
+                               w_orig: int, h_orig: int):
+        """Draw skeleton joints and limb connections on the preview image."""
+        # Build pixel position map for drawing limbs
+        joint_pixels = {}
+
+        for lm in landmarks:
+            if lm is None:
+                continue
+            idx = lm.index
+            # Re-project 3D back to 2D pixel coords for display
+            # Use the stored pixel visibility approach — approximate from landmark data
+            if hasattr(lm, '_px') and hasattr(lm, '_py'):
+                px = int(lm._px * sx)
+                py = int(lm._py * sy)
+            else:
+                # Approximate: use x/z and y/z projection
+                if lm.z > 0.01:
+                    # Rough reprojection (camera intrinsics scaled)
+                    from camera import DEFAULT_V2_INTRINSICS
+                    fx = DEFAULT_V2_INTRINSICS["fx"]
+                    fy = DEFAULT_V2_INTRINSICS["fy"]
+                    cx = DEFAULT_V2_INTRINSICS["cx"]
+                    cy = DEFAULT_V2_INTRINSICS["cy"]
+                    px_orig = int(lm.x * fx / lm.z + cx)
+                    py_orig = int(lm.y * fy / lm.z + cy)
+                    px = int(px_orig * sx)
+                    py = int(py_orig * sy)
+                else:
+                    continue
+
+            px = max(0, min(px, PREVIEW_W - 1))
+            py = max(0, min(py, PREVIEW_H - 1))
+            joint_pixels[idx] = (px, py)
+
+            # Color by confidence
+            conf = lm.depth_confidence
+            if conf >= 0.7:
+                color = (0, 255, 0)    # green = high
+            elif conf >= 0.3:
+                color = (0, 255, 255)  # yellow = medium
+            else:
+                color = (0, 0, 255)    # red = low
+
+            cv2.circle(img, (px, py), 4, color, -1)
+            cv2.circle(img, (px, py), 5, color, 1)
+
+        # Draw limb connections
+        for (a, b) in LIMB_CONNECTIONS:
+            if a in joint_pixels and b in joint_pixels:
+                pa = joint_pixels[a]
+                pb = joint_pixels[b]
+                cv2.line(img, pa, pb, (200, 200, 200), 1, cv2.LINE_AA)
+
+    def _on_body_select(self, event):
+        val = self.var_body.get()
+        if val == "Auto (nearest)":
+            self._selected_body = -1  # auto
+        else:
+            try:
+                idx = int(val.split(" ")[1]) - 1
+                self._selected_body = idx
+            except (ValueError, IndexError):
+                self._selected_body = -1
+
+    def _on_canvas_click(self, event):
+        """Click on a bounding box to select that body."""
+        if not self._bodies:
+            return
+        # Check if click is inside any bounding box
+        for i, body in enumerate(self._bodies):
+            bbox = body.get("bbox")
+            if not bbox:
+                continue
+            # Scale bbox to preview coords
+            h_orig = body.get("frame_h", 1080)
+            w_orig = body.get("frame_w", 1920)
+            sx = PREVIEW_W / w_orig
+            sy = PREVIEW_H / h_orig
+            x1 = int(bbox[0] * sx)
+            y1 = int(bbox[1] * sy)
+            x2 = int(bbox[2] * sx)
+            y2 = int(bbox[3] * sy)
+            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                self._selected_body = i
+                self.var_body.set(f"Body {i + 1}")
+                return
+
+    @property
+    def selected_body_index(self) -> int:
+        return self._selected_body
+
+
+# ── Person Detector ──────────────────────────────────────────────────────────
+class PersonDetector:
+    """Lightweight person detector using OpenCV HOG for multi-body bounding boxes."""
+
+    def __init__(self):
+        self._hog = cv2.HOGDescriptor()
+        self._hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+
+    def detect(self, rgb_frame: np.ndarray) -> List[dict]:
+        """Detect people in frame, return list of {bbox, center, area}."""
+        h, w = rgb_frame.shape[:2]
+        # Downscale for speed
+        scale = 1.0
+        if w > 640:
+            scale = 640.0 / w
+            small = cv2.resize(rgb_frame, (640, int(h * scale)))
+        else:
+            small = rgb_frame
+
+        boxes, weights = self._hog.detectMultiScale(
+            small, winStride=(8, 8), padding=(4, 4), scale=1.05
+        )
+        bodies = []
+        for i, (bx, by, bw, bh) in enumerate(boxes):
+            # Scale back to original coords
+            x1 = int(bx / scale)
+            y1 = int(by / scale)
+            x2 = int((bx + bw) / scale)
+            y2 = int((by + bh) / scale)
+            cx = (x1 + x2) / 2
+            cy = (y1 + y2) / 2
+            bodies.append({
+                "bbox": (x1, y1, x2, y2),
+                "center": (cx, cy),
+                "area": (x2 - x1) * (y2 - y1),
+                "frame_w": w,
+                "frame_h": h,
+                "weight": float(weights[i]) if i < len(weights) else 0.0,
+            })
+
+        # Sort by distance to frame center (for auto-select)
+        frame_cx, frame_cy = w / 2, h / 2
+        bodies.sort(key=lambda b: (b["center"][0] - frame_cx) ** 2 +
+                                   (b["center"][1] - frame_cy) ** 2)
+        return bodies
+
+    @staticmethod
+    def select_nearest_center(bodies: List[dict], frame_w: int, frame_h: int) -> int:
+        """Return index of body closest to frame center."""
+        if not bodies:
+            return 0
+        cx, cy = frame_w / 2, frame_h / 2
+        best = 0
+        best_dist = float("inf")
+        for i, b in enumerate(bodies):
+            dx = b["center"][0] - cx
+            dy = b["center"][1] - cy
+            d = dx * dx + dy * dy
+            if d < best_dist:
+                best_dist = d
+                best = i
+        return best
+
+
 # ── Main GUI ─────────────────────────────────────────────────────────────────
 class FBTServerGUI:
     def __init__(self):
@@ -73,7 +384,7 @@ class FBTServerGUI:
         self.root.title("FBT Server — Kinect v2 Full-Body Tracking")
         self.root.configure(bg=BG)
         self.root.resizable(True, True)
-        self.root.minsize(700, 560)
+        self.root.minsize(900, 700)
 
         # Set window icon if available
         try:
@@ -87,9 +398,21 @@ class FBTServerGUI:
         self._status: dict = {}
         self._running = False
 
+        # Shared state for live preview
+        self._preview_frames: Dict[int, dict] = {}  # cam_id -> {rgb, landmarks, bodies, fps}
+        self._preview_lock = threading.Lock()
+        self._feed_panels: Dict[int, CameraFeedPanel] = {}
+        self._person_detector = PersonDetector()
+
+        # Variable capture rate (shared with server thread)
+        self._target_fps = tk.IntVar(value=20)
+        self._frame_interval_lock = threading.Lock()
+        self._current_frame_interval = 1.0 / 20
+
         self._build_ui()
         self._setup_logging()
         self._poll()
+        self._poll_preview()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -111,15 +434,18 @@ class FBTServerGUI:
         tk.Label(hdr, text="Kinect v2 → VRChat Full-Body Tracking",
                  font=FONT, bg=ACCENT, fg="#d4b8ff").pack(side="left")
 
-        # ── Main layout: left (controls) + right (log) ───────────────────
+        # ── Main layout: left (controls) + center (feeds) + right (log) ──
         main = tk.Frame(root, bg=BG)
         main.pack(fill="both", expand=True, padx=12, pady=8)
 
-        left = tk.Frame(main, bg=BG, width=340)
+        left = tk.Frame(main, bg=BG, width=320)
         left.pack(side="left", fill="y", padx=(0, 8))
         left.pack_propagate(False)
 
-        right = tk.Frame(main, bg=BG)
+        center = tk.Frame(main, bg=BG)
+        center.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        right = tk.Frame(main, bg=BG, width=360)
         right.pack(side="left", fill="both", expand=True)
 
         # ── Settings card ───────────────────────────────────────────────────
@@ -144,6 +470,21 @@ class FBTServerGUI:
             cursor="hand2", command=self._run_calibration,
         )
         self.btn_calibrate.pack(fill="x", pady=(0, 4))
+
+        # ── Camera feeds area ───────────────────────────────────────────────
+        feed_label = tk.Label(center, text="Camera Feeds", font=FONT_H, bg=BG, fg=TEXT)
+        feed_label.pack(anchor="w")
+
+        self.feed_container = tk.Frame(center, bg=BG)
+        self.feed_container.pack(fill="both", expand=True)
+
+        # Placeholder
+        self.feed_placeholder = tk.Label(
+            self.feed_container,
+            text="Start server to see camera feeds",
+            font=FONT, bg=BG3, fg=SUBTEXT, pady=80
+        )
+        self.feed_placeholder.pack(fill="both", expand=True)
 
         # ── Log view ────────────────────────────────────────────────────────
         tk.Label(right, text="Server Log", font=FONT_H, bg=BG, fg=TEXT).pack(anchor="w")
@@ -186,9 +527,25 @@ class FBTServerGUI:
 
         self.e_target_ip   = row("Quest IP",        "192.168.1.100")
         self.e_target_port = row("OSC Port",         "39571")
-        self.e_fps         = row("FPS",              "20")
         self.e_height      = row("User Height (m)",  "1.70")
         self.e_cal_file    = row("Calibration File", "calibration.json")
+
+        # Capture Rate slider (replaces FPS text entry)
+        f_fps = tk.Frame(card, bg=BG2)
+        f_fps.pack(fill="x", pady=2)
+        tk.Label(f_fps, text="Capture Rate", font=FONT, bg=BG2, fg=SUBTEXT,
+                 width=16, anchor="w").pack(side="left")
+        self.slider_fps = tk.Scale(
+            f_fps, from_=10, to=60, orient="horizontal",
+            variable=self._target_fps,
+            bg=BG2, fg=TEXT, troughcolor="#12121f",
+            highlightthickness=0, sliderrelief="flat",
+            font=FONT_SM, length=140,
+            command=self._on_fps_change,
+        )
+        self.slider_fps.pack(side="left", fill="x", expand=True)
+        self.lbl_hz = tk.Label(f_fps, text="20 Hz", font=FONT_SM, bg=BG2, fg=CYAN, width=6)
+        self.lbl_hz.pack(side="left")
 
         # Camera count
         f = tk.Frame(card, bg=BG2)
@@ -208,6 +565,12 @@ class FBTServerGUI:
         tk.Checkbutton(card, text="HTTP Debug Server (port 8090)", variable=self.var_debug,
                        bg=BG2, fg=TEXT, selectcolor=BG, activebackground=BG2,
                        font=FONT).pack(anchor="w")
+
+    def _on_fps_change(self, val):
+        fps = int(val)
+        self.lbl_hz.config(text=f"{fps} Hz")
+        with self._frame_interval_lock:
+            self._current_frame_interval = 1.0 / fps
 
     def _status_card(self, parent):
         card = tk.LabelFrame(parent, text="Status", bg=BG2, fg=TEXT,
@@ -233,8 +596,17 @@ class FBTServerGUI:
 
         self.lbl_cameras   = row("Cameras Active")
         self.lbl_joints    = row("Joints Tracked")
-        self.lbl_fps       = row("Fusion FPS")
         self.lbl_osc       = row("OSC Target")
+
+        # FPS: actual vs target
+        f_fps = tk.Frame(card, bg=BG2)
+        f_fps.pack(fill="x", pady=2)
+        tk.Label(f_fps, text="Fusion FPS", font=FONT, bg=BG2, fg=SUBTEXT,
+                 width=16, anchor="w").pack(side="left")
+        self.lbl_fps_actual = tk.Label(f_fps, text="—", font=FONT, bg=BG2, fg=TEXT, anchor="w")
+        self.lbl_fps_actual.pack(side="left")
+        self.lbl_fps_target = tk.Label(f_fps, text="", font=FONT_SM, bg=BG2, fg=SUBTEXT, anchor="w")
+        self.lbl_fps_target.pack(side="left", padx=(4, 0))
 
         # Tracker confidence bars
         tk.Label(card, text="Trackers", font=FONT, bg=BG2, fg=SUBTEXT).pack(anchor="w", pady=(4, 0))
@@ -265,6 +637,51 @@ class FBTServerGUI:
             self._tracker_bars[tid][0].config(fg=color)
             self._tracker_bars[tid][1].set(conf)
 
+    def _create_feed_panels(self, num_cameras: int):
+        """Create camera feed panels for the given number of cameras."""
+        # Remove placeholder
+        if self.feed_placeholder:
+            self.feed_placeholder.pack_forget()
+            self.feed_placeholder = None
+
+        # Clear existing panels
+        for panel in self._feed_panels.values():
+            panel.destroy()
+        self._feed_panels.clear()
+
+        for i in range(num_cameras):
+            panel = CameraFeedPanel(self.feed_container, cam_id=i)
+            panel.pack(fill="x", pady=2, padx=2)
+            self._feed_panels[i] = panel
+
+    def _remove_feed_panels(self):
+        """Remove feed panels and show placeholder."""
+        for panel in self._feed_panels.values():
+            panel.destroy()
+        self._feed_panels.clear()
+        self._preview_frames.clear()
+
+        self.feed_placeholder = tk.Label(
+            self.feed_container,
+            text="Start server to see camera feeds",
+            font=FONT, bg=BG3, fg=SUBTEXT, pady=80
+        )
+        self.feed_placeholder.pack(fill="both", expand=True)
+
+    def _poll_preview(self):
+        """Update camera feed previews at ~15fps."""
+        if self._running:
+            with self._preview_lock:
+                for cam_id, data in self._preview_frames.items():
+                    if cam_id in self._feed_panels:
+                        self._feed_panels[cam_id].update_feed(
+                            rgb_frame=data.get("rgb"),
+                            landmarks=data.get("landmarks"),
+                            bodies=data.get("bodies"),
+                            fps=data.get("fps", 0.0),
+                        )
+        self.root.after(int(1000 / PREVIEW_FPS), self._poll_preview)
+
     def _toggle_server(self):
         if self._running:
             self._stop_server()
@@ -272,7 +689,6 @@ class FBTServerGUI:
             self._start_server()
 
     def _start_server(self):
-        # Build args from UI
         args = self._collect_args()
         if args is None:
             return
@@ -296,6 +712,7 @@ class FBTServerGUI:
         self.dot_server.set(RED)
         self.lbl_server_state.config(text="Stopped", fg=RED)
         self.lbl_statusbar.config(text="Server stopped")
+        self.root.after(1000, self._remove_feed_panels)
 
     def _run_server(self, args):
         """Run the server in background thread — mirrors server.py main()."""
@@ -306,12 +723,13 @@ class FBTServerGUI:
             from fusion import MultiCameraFusion
             from osc_output import OSCOutput
             from debug_http import init_debug_server, start_debug_server
-            import importlib
-            # Patch camera module to use platform backend
             cam_module.PLATFORM_BACKEND_FACTORY = create_backend
 
             num_cams = args["num_cameras"] or count_devices() or 1
             logging.info(f"Starting with {num_cams} camera(s) → {args['target_ip']}:{args['target_port']}")
+
+            # Create feed panels in main thread
+            self.root.after(0, lambda: self._create_feed_panels(num_cams))
 
             cameras = [cam_module.KinectCamera(i, fps_target=args["fps"]) for i in range(num_cams)]
             for c in cameras:
@@ -339,11 +757,16 @@ class FBTServerGUI:
                 init_debug_server(shared_state)
                 start_debug_server(8090)
 
-            frame_interval = 1.0 / args["fps"]
             fps_counter = 0
             fps_time = time.monotonic()
+            preview_time = time.monotonic()
+            preview_interval = 1.0 / PREVIEW_FPS
 
             while not self._server_stop_event.is_set():
+                # Read current frame interval (can change via slider)
+                with self._frame_interval_lock:
+                    frame_interval = self._current_frame_interval
+
                 t0 = time.monotonic()
                 frames = [f for c in cameras
                           for f in [c.get_frame(timeout=frame_interval * 0.4)]
@@ -361,13 +784,35 @@ class FBTServerGUI:
                                                                 "position": t.position}
                                                  for t in trackers}
 
+                    # Update preview frames (throttled to preview FPS)
+                    now_preview = time.monotonic()
+                    if now_preview - preview_time >= preview_interval:
+                        preview_time = now_preview
+                        with self._preview_lock:
+                            for frame in frames:
+                                cam_id = frame.camera_id
+                                # Detect multiple bodies
+                                bodies = []
+                                if frame.rgb_preview is not None:
+                                    try:
+                                        bodies = self._person_detector.detect(frame.rgb_preview)
+                                    except Exception:
+                                        pass
+
+                                self._preview_frames[cam_id] = {
+                                    "rgb": frame.rgb_preview,
+                                    "landmarks": frame.landmarks,
+                                    "bodies": bodies,
+                                    "fps": cameras[cam_id].fps if cam_id < len(cameras) else 0,
+                                }
+
                 fps_counter += 1
                 now = time.monotonic()
                 if now - fps_time >= 1.0:
-                    shared_state["fusion_fps"] = fps_counter / (now - fps_time)
+                    actual_fps = fps_counter / (now - fps_time)
+                    shared_state["fusion_fps"] = actual_fps
                     fps_counter = 0
                     fps_time = now
-                    # Update UI from main thread
                     self._push_status_update(shared_state)
 
                 elapsed = time.monotonic() - t0
@@ -391,10 +836,22 @@ class FBTServerGUI:
                 text="▶  Start Server", bg=GREEN, activebackground="#16a34a"))
 
     def _push_status_update(self, state: dict):
+        target_fps = self._target_fps.get()
+        actual_fps = state.get('fusion_fps', 0)
+
         def update():
             self.lbl_cameras.config(text=str(state.get("cameras_active", "—")))
             self.lbl_joints.config(text=str(state.get("joints_tracked", "—")))
-            self.lbl_fps.config(text=f"{state.get('fusion_fps', 0):.1f}")
+            self.lbl_fps_actual.config(text=f"{actual_fps:.1f}")
+            self.lbl_fps_target.config(text=f"/ {target_fps} target")
+            # Color actual FPS based on how close to target
+            ratio = actual_fps / target_fps if target_fps > 0 else 0
+            if ratio >= 0.9:
+                self.lbl_fps_actual.config(fg=GREEN)
+            elif ratio >= 0.7:
+                self.lbl_fps_actual.config(fg=YELLOW)
+            else:
+                self.lbl_fps_actual.config(fg=RED)
             self._update_tracker_ui(state.get("trackers", {}))
         self.root.after(0, update)
 
@@ -433,7 +890,7 @@ class FBTServerGUI:
         try:
             ip = self.e_target_ip.get().strip()
             port = int(self.e_target_port.get().strip())
-            fps = int(self.e_fps.get().strip())
+            fps = self._target_fps.get()
             height = float(self.e_height.get().strip())
             cal_file = self.e_cal_file.get().strip()
             num_cams_str = self.var_cams.get()
