@@ -523,7 +523,8 @@ class WindowsKinect2Backend(KinectBackend):
             self._kinect = PyKinectRuntime.PyKinectRuntime(
                 PyKinectV2.FrameSourceTypes_Color | PyKinectV2.FrameSourceTypes_Depth
             )
-            self._coord_mapper = self._kinect.CoordinateMapper
+            # pykinect2 stores the coordinate mapper as _mapper (not CoordinateMapper)
+            self._coord_mapper = self._kinect._mapper
             logger.info("[Windows] Kinect v2 opened via Kinect for Windows SDK")
             return True
         except (ImportError, AssertionError) as e:

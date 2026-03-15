@@ -868,30 +868,7 @@ class FBTServerGUI:
         args = self._collect_args()
         if args is None:
             return
-
-        def do_cal():
-            try:
-                from platform_backend import count_devices, create_backend
-                import camera as cam_module
-                cam_module.PLATFORM_BACKEND_FACTORY = create_backend
-                from calibration import run_calibration
-                num_cams = args["num_cameras"] or count_devices() or 1
-                cameras = [cam_module.KinectCamera(i, 15) for i in range(num_cams)]
-                for c in cameras:
-                    c.start()
-                time.sleep(2)
-                logging.info("Starting calibration — place checkerboard now!")
-                run_calibration(cameras, filepath=args["cal_file"])
-                for c in cameras:
-                    c.stop()
-                self.root.after(0, lambda: messagebox.showinfo(
-                    "Calibration", f"Done! Saved to {args['cal_file']}"))
-            except Exception as e:
-                logging.error(f"Calibration failed: {e}")
-                err_msg = str(e)
-                self.root.after(0, lambda msg=err_msg: messagebox.showerror("Calibration Error", msg))
-
-        threading.Thread(target=do_cal, daemon=True).start()
+        CalibrationWizard(self.root, args)
 
     def _collect_args(self) -> dict:
         try:
@@ -941,6 +918,445 @@ class FBTServerGUI:
 
     def run(self):
         self.root.mainloop()
+
+
+# ── Calibration Wizard ────────────────────────────────────────────────────────
+CHECKERBOARD = (9, 6)
+
+class CalibrationWizard:
+    """Modal calibration wizard with live camera feeds and checkerboard detection."""
+
+    def __init__(self, parent, args: dict):
+        self._args = args
+        self._cameras = []
+        self._running = False
+        self._stop_event = threading.Event()
+        self._checkerboard_status: Dict[int, bool] = {}  # cam_id -> detected
+        self._capture_counts: Dict[str, int] = {}  # "a-b" -> frames captured
+        self._current_pair_idx = 0
+        self._capturing = False
+        self._cal_thread = None
+
+        self.win = tk.Toplevel(parent)
+        self.win.title("Calibration Wizard")
+        self.win.configure(bg=BG)
+        self.win.geometry("1050x700")
+        self.win.resizable(True, True)
+        self.win.grab_set()
+
+        self._build_ui()
+        self._start_cameras()
+
+    def _build_ui(self):
+        # Header
+        hdr = tk.Frame(self.win, bg=ACCENT, pady=6)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="Calibration Wizard", font=(FONT[0], 14, "bold"),
+                 bg=ACCENT, fg=TEXT).pack(side="left", padx=12)
+        self.lbl_step = tk.Label(hdr, text="Starting cameras...", font=FONT,
+                                 bg=ACCENT, fg="#d4b8ff")
+        self.lbl_step.pack(side="left", padx=8)
+
+        # Main area: camera feeds
+        self.feeds_frame = tk.Frame(self.win, bg=BG)
+        self.feeds_frame.pack(fill="both", expand=True, padx=8, pady=4)
+
+        # Status / instructions panel
+        bot = tk.Frame(self.win, bg=BG2, pady=8)
+        bot.pack(fill="x", padx=8, pady=(0, 4))
+
+        self.lbl_instructions = tk.Label(
+            bot, text="Waiting for cameras to start...",
+            font=FONT, bg=BG2, fg=TEXT, wraplength=900, justify="left",
+        )
+        self.lbl_instructions.pack(fill="x", padx=8)
+
+        # Per-camera checkerboard status
+        self.status_frame = tk.Frame(bot, bg=BG2)
+        self.status_frame.pack(fill="x", padx=8, pady=(4, 0))
+        self._cam_status_labels: Dict[int, tk.Label] = {}
+
+        # Progress bar for capture
+        self.progress_var = tk.DoubleVar(value=0)
+        self.progress_bar = ttk.Progressbar(bot, variable=self.progress_var,
+                                            maximum=100, length=400)
+        self.progress_bar.pack(pady=(4, 0))
+
+        # Buttons
+        btn_frame = tk.Frame(self.win, bg=BG)
+        btn_frame.pack(fill="x", padx=8, pady=(0, 8))
+
+        self.btn_capture = tk.Button(
+            btn_frame, text="Capture Pair", font=FONT_B,
+            bg=GREEN, fg="white", relief="flat", pady=6, cursor="hand2",
+            command=self._start_capture, state="disabled",
+        )
+        self.btn_capture.pack(side="left", padx=(0, 8))
+
+        self.btn_skip = tk.Button(
+            btn_frame, text="Skip Pair", font=FONT,
+            bg=YELLOW, fg="black", relief="flat", pady=6, cursor="hand2",
+            command=self._skip_pair, state="disabled",
+        )
+        self.btn_skip.pack(side="left", padx=(0, 8))
+
+        self.btn_close = tk.Button(
+            btn_frame, text="Cancel", font=FONT,
+            bg=RED, fg="white", relief="flat", pady=6, cursor="hand2",
+            command=self._close,
+        )
+        self.btn_close.pack(side="right")
+
+        self.win.protocol("WM_DELETE_WINDOW", self._close)
+
+    def _start_cameras(self):
+        def do_start():
+            try:
+                from platform_backend import count_devices, create_backend
+                import camera as cam_module
+                cam_module.PLATFORM_BACKEND_FACTORY = create_backend
+
+                num_cams = self._args["num_cameras"] or count_devices() or 1
+                self._cameras = [cam_module.KinectCamera(i, 15) for i in range(num_cams)]
+                for c in self._cameras:
+                    c.start()
+                time.sleep(1.5)  # let cameras warm up
+
+                self._running = True
+                self.win.after(0, self._on_cameras_ready)
+                self._poll_feeds()
+            except Exception as e:
+                logging.error(f"Calibration: camera start failed: {e}")
+                err = str(e)
+                self.win.after(0, lambda: messagebox.showerror(
+                    "Camera Error", err, parent=self.win))
+                self.win.after(0, self._close)
+
+        threading.Thread(target=do_start, daemon=True).start()
+
+    def _on_cameras_ready(self):
+        num = len(self._cameras)
+
+        # Create feed panels
+        for widget in self.feeds_frame.winfo_children():
+            widget.destroy()
+        self._feed_canvases: Dict[int, tk.Canvas] = {}
+        self._feed_photos: Dict[int, object] = {}
+
+        for i, cam in enumerate(self._cameras):
+            frame = tk.LabelFrame(self.feeds_frame, text=f"Camera {cam.device_index}",
+                                  bg=BG2, fg=TEXT, font=FONT_B, relief="flat", padx=4, pady=4)
+            frame.pack(side="left", fill="both", expand=True, padx=4, pady=4)
+
+            canvas = tk.Canvas(frame, width=PREVIEW_W, height=PREVIEW_H,
+                               bg="#0a0a14", highlightthickness=0)
+            canvas.pack()
+            self._feed_canvases[cam.device_index] = canvas
+
+            # Status label per camera
+            lbl = tk.Label(self.status_frame,
+                           text=f"Cam {cam.device_index}: No checkerboard",
+                           font=FONT, bg=BG2, fg=RED)
+            lbl.pack(side="left", padx=(0, 16))
+            self._cam_status_labels[cam.device_index] = lbl
+
+        if num < 2:
+            self.lbl_step.config(text="Single camera — saving identity calibration")
+            self.lbl_instructions.config(
+                text="Only 1 camera detected. Saving identity calibration (no stereo pairs needed)."
+            )
+            self.btn_capture.config(state="disabled")
+            self.btn_skip.config(state="disabled")
+            # Save single-camera calibration
+            self._save_single_camera_cal()
+        else:
+            self._total_pairs = num - 1
+            self._current_pair_idx = 0
+            self._show_pair_instructions()
+
+    def _save_single_camera_cal(self):
+        from calibration import save_calibration
+        import numpy as np
+        cal = {self._cameras[0].device_index: np.eye(4)}
+        save_calibration(cal, self._args["cal_file"])
+        self.lbl_instructions.config(
+            text=f"Calibration saved to {self._args['cal_file']}. You can close this window."
+        )
+        self.btn_close.config(text="Done", bg=GREEN)
+
+    def _show_pair_instructions(self):
+        idx = self._current_pair_idx
+        cam_a = self._cameras[idx]
+        cam_b = self._cameras[idx + 1]
+        self.lbl_step.config(
+            text=f"Pair {idx + 1}/{self._total_pairs}: "
+                 f"Camera {cam_a.device_index} + Camera {cam_b.device_index}"
+        )
+        self.lbl_instructions.config(
+            text=f"Hold the checkerboard ({CHECKERBOARD[0]}x{CHECKERBOARD[1]}) where BOTH "
+                 f"Camera {cam_a.device_index} and Camera {cam_b.device_index} can see it.\n"
+                 f"The status below will turn green when a camera detects the grid. "
+                 f"Once both are green, click 'Capture Pair'."
+        )
+        self.btn_capture.config(state="normal")
+        self.btn_skip.config(state="normal")
+        self.progress_var.set(0)
+
+    def _poll_feeds(self):
+        """Background thread: grab frames, detect checkerboard, push to UI."""
+        while self._running and not self._stop_event.is_set():
+            for cam in self._cameras:
+                frame = cam.get_frame(timeout=0.05)
+                if frame is None or frame.rgb_preview is None:
+                    continue
+
+                rgb = frame.rgb_preview
+                cam_id = cam.device_index
+
+                # Detect checkerboard
+                small = cv2.resize(rgb, (640, 360))
+                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+                found, corners = cv2.findChessboardCorners(
+                    gray, CHECKERBOARD,
+                    cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_FAST_CHECK
+                )
+                self._checkerboard_status[cam_id] = found
+
+                # Build preview image
+                preview = cv2.resize(rgb, (PREVIEW_W, PREVIEW_H))
+                preview = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
+
+                if found:
+                    # Scale corners to preview size
+                    sx = PREVIEW_W / 640
+                    sy = PREVIEW_H / 360
+                    scaled_corners = corners.copy()
+                    scaled_corners[:, :, 0] *= sx
+                    scaled_corners[:, :, 1] *= sy
+                    cv2.drawChessboardCorners(preview, CHECKERBOARD, scaled_corners, found)
+                    # Green border
+                    cv2.rectangle(preview, (2, 2), (PREVIEW_W - 3, PREVIEW_H - 3),
+                                  (0, 220, 0), 3)
+                else:
+                    # Red border
+                    cv2.rectangle(preview, (2, 2), (PREVIEW_W - 3, PREVIEW_H - 3),
+                                  (200, 0, 0), 2)
+
+                # Push to UI
+                if Image is not None and ImageTk is not None:
+                    pil_img = Image.fromarray(preview)
+                    self.win.after(0, lambda cid=cam_id, img=pil_img: self._update_canvas(cid, img))
+
+                # Update status label
+                self.win.after(0, lambda cid=cam_id, f=found: self._update_status_label(cid, f))
+
+            time.sleep(0.05)
+
+    def _update_canvas(self, cam_id: int, pil_img):
+        if cam_id not in self._feed_canvases:
+            return
+        try:
+            photo = ImageTk.PhotoImage(pil_img)
+            canvas = self._feed_canvases[cam_id]
+            canvas.delete("all")
+            canvas.create_image(0, 0, anchor="nw", image=photo)
+            self._feed_photos[cam_id] = photo  # prevent GC
+        except Exception:
+            pass
+
+    def _update_status_label(self, cam_id: int, found: bool):
+        if cam_id not in self._cam_status_labels:
+            return
+        if found:
+            self._cam_status_labels[cam_id].config(
+                text=f"Cam {cam_id}: Checkerboard DETECTED", fg=GREEN)
+        else:
+            self._cam_status_labels[cam_id].config(
+                text=f"Cam {cam_id}: No checkerboard", fg=RED)
+
+    def _start_capture(self):
+        if self._capturing:
+            return
+        idx = self._current_pair_idx
+        cam_a = self._cameras[idx]
+        cam_b = self._cameras[idx + 1]
+
+        # Check both cameras see the checkerboard
+        a_ok = self._checkerboard_status.get(cam_a.device_index, False)
+        b_ok = self._checkerboard_status.get(cam_b.device_index, False)
+        if not a_ok or not b_ok:
+            missing = []
+            if not a_ok:
+                missing.append(f"Camera {cam_a.device_index}")
+            if not b_ok:
+                missing.append(f"Camera {cam_b.device_index}")
+            if not messagebox.askyesno(
+                "Checkerboard Not Detected",
+                f"{', '.join(missing)} cannot see the checkerboard right now.\n"
+                "Capture anyway? (Will wait for both to detect it)",
+                parent=self.win,
+            ):
+                return
+
+        self._capturing = True
+        self.btn_capture.config(state="disabled", text="Capturing...")
+        self.btn_skip.config(state="disabled")
+
+        def do_capture():
+            try:
+                self._capture_pair(cam_a, cam_b)
+            except Exception as e:
+                logging.error(f"Capture failed: {e}")
+                self.win.after(0, lambda: messagebox.showerror(
+                    "Capture Error", str(e), parent=self.win))
+            finally:
+                self._capturing = False
+                self.win.after(0, self._on_pair_done)
+
+        threading.Thread(target=do_capture, daemon=True).start()
+
+    def _capture_pair(self, cam_a, cam_b):
+        """Capture checkerboard frames from both cameras simultaneously."""
+        from calibration import (CHECKERBOARD, SQUARE_SIZE_MM, NUM_FRAMES,
+                                 _get_camera_intrinsics_matrix, save_calibration)
+        import numpy as np
+
+        objp = np.zeros((CHECKERBOARD[0] * CHECKERBOARD[1], 3), np.float32)
+        objp[:, :2] = np.mgrid[0:CHECKERBOARD[0], 0:CHECKERBOARD[1]].T.reshape(-1, 2)
+        objp *= SQUARE_SIZE_MM
+
+        obj_pts = []
+        img_pts_a = []
+        img_pts_b = []
+        target = NUM_FRAMES
+        timeout = time.monotonic() + 120
+
+        while len(obj_pts) < target and time.monotonic() < timeout and not self._stop_event.is_set():
+            fa = cam_a.get_frame(timeout=0.3)
+            fb = cam_b.get_frame(timeout=0.3)
+            if fa is None or fb is None or fa.rgb_preview is None or fb.rgb_preview is None:
+                time.sleep(0.02)
+                continue
+
+            gray_a = cv2.cvtColor(cv2.resize(fa.rgb_preview, (960, 540)), cv2.COLOR_BGR2GRAY)
+            gray_b = cv2.cvtColor(cv2.resize(fb.rgb_preview, (960, 540)), cv2.COLOR_BGR2GRAY)
+
+            ret_a, corners_a = cv2.findChessboardCorners(gray_a, CHECKERBOARD, None)
+            ret_b, corners_b = cv2.findChessboardCorners(gray_b, CHECKERBOARD, None)
+
+            if ret_a and ret_b:
+                obj_pts.append(objp)
+                img_pts_a.append(corners_a)
+                img_pts_b.append(corners_b)
+                pct = len(obj_pts) / target * 100
+                self.win.after(0, lambda p=pct: self.progress_var.set(p))
+                logging.info(f"Calibration: captured frame {len(obj_pts)}/{target} "
+                             f"(cam {cam_a.device_index}+{cam_b.device_index})")
+
+            time.sleep(0.05)
+
+        pair_key = f"{cam_a.device_index}-{cam_b.device_index}"
+        self._capture_counts[pair_key] = len(obj_pts)
+
+        if len(obj_pts) < 5:
+            logging.warning(f"Only {len(obj_pts)} frames captured for pair {pair_key}")
+            # Store empty result — will use identity
+            self._pair_results = getattr(self, '_pair_results', {})
+            self._pair_results[pair_key] = None
+            return
+
+        img_size = (960, 540)
+        K_a = _get_camera_intrinsics_matrix(cam_a, img_size)
+        K_b = _get_camera_intrinsics_matrix(cam_b, img_size)
+        dist = np.zeros(5)
+
+        try:
+            ret, K1, d1, K2, d2, R, T, E, F = cv2.stereoCalibrate(
+                obj_pts, img_pts_a, img_pts_b,
+                K_a.copy(), dist.copy(),
+                K_b.copy(), dist.copy(),
+                img_size,
+                flags=cv2.CALIB_FIX_INTRINSIC,
+            )
+            mat_b_to_a = np.eye(4)
+            mat_b_to_a[:3, :3] = R.T
+            mat_b_to_a[:3, 3] = (-R.T @ T).ravel()
+
+            self._pair_results = getattr(self, '_pair_results', {})
+            self._pair_results[pair_key] = {
+                "mat_b_to_a": mat_b_to_a,
+                "rms": ret,
+                "cam_a": cam_a.device_index,
+                "cam_b": cam_b.device_index,
+            }
+            logging.info(f"Calibration pair {pair_key}: RMS={ret:.3f}")
+        except Exception as e:
+            logging.error(f"Stereo calibration failed for {pair_key}: {e}")
+            self._pair_results = getattr(self, '_pair_results', {})
+            self._pair_results[pair_key] = None
+
+    def _skip_pair(self):
+        idx = self._current_pair_idx
+        cam_a = self._cameras[idx]
+        cam_b = self._cameras[idx + 1]
+        pair_key = f"{cam_a.device_index}-{cam_b.device_index}"
+        self._pair_results = getattr(self, '_pair_results', {})
+        self._pair_results[pair_key] = None
+        logging.warning(f"Skipped calibration pair {pair_key} — will use identity")
+        self._on_pair_done()
+
+    def _on_pair_done(self):
+        self._current_pair_idx += 1
+        if self._current_pair_idx < self._total_pairs:
+            self.btn_capture.config(state="normal", text="Capture Pair")
+            self.btn_skip.config(state="normal")
+            self._show_pair_instructions()
+        else:
+            self._finalize_calibration()
+
+    def _finalize_calibration(self):
+        """Build chained calibration from pair results and save."""
+        import numpy as np
+        from calibration import save_calibration
+
+        calibration = {self._cameras[0].device_index: np.eye(4)}
+        pair_results = getattr(self, '_pair_results', {})
+
+        for i in range(len(self._cameras) - 1):
+            cam_a = self._cameras[i]
+            cam_b = self._cameras[i + 1]
+            pair_key = f"{cam_a.device_index}-{cam_b.device_index}"
+            result = pair_results.get(pair_key)
+
+            if result is not None:
+                cam_a_to_world = calibration[cam_a.device_index]
+                calibration[cam_b.device_index] = cam_a_to_world @ result["mat_b_to_a"]
+                logging.info(f"Camera {cam_b.device_index}: calibrated (RMS={result['rms']:.3f})")
+            else:
+                calibration[cam_b.device_index] = calibration.get(
+                    cam_a.device_index, np.eye(4)).copy()
+                logging.warning(f"Camera {cam_b.device_index}: using identity (no calibration data)")
+
+        save_calibration(calibration, self._args["cal_file"])
+
+        self.lbl_step.config(text="Calibration Complete")
+        self.lbl_instructions.config(
+            text=f"Calibration saved to {self._args['cal_file']}.\n"
+                 f"Calibrated {len(calibration)} cameras. You can close this window."
+        )
+        self.btn_capture.pack_forget()
+        self.btn_skip.pack_forget()
+        self.btn_close.config(text="Done", bg=GREEN)
+
+    def _close(self):
+        self._running = False
+        self._stop_event.set()
+        for cam in self._cameras:
+            try:
+                cam.stop()
+            except Exception:
+                pass
+        self.win.destroy()
 
 
 def main():
