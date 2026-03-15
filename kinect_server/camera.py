@@ -385,13 +385,34 @@ class KinectCamera:
             self._device_info = get_v2_device_info()
         return self._process_frame(rgb_full, depth_registered)
 
+    _synthetic_frame_count: int = 0
+
     def _capture_synthetic_frame(self) -> Optional[CameraFrame]:
         """Synthetic data for testing without Kinect hardware."""
         # Use device_info resolution or default to v2
         if self._device_info is None:
             self._device_info = get_synthetic_device_info()
         info = self._device_info
+        self._synthetic_frame_count += 1
+        t = self._synthetic_frame_count
+
+        # Generate a visible test pattern instead of black
         rgb_full = np.zeros((info.height, info.width, 3), dtype=np.uint8)
+        # Dark blue-gray background
+        rgb_full[:, :] = (30, 30, 50)
+        # Scrolling grid lines
+        for y in range(0, info.height, 40):
+            offset = (t * 2) % 40
+            row = (y + offset) % info.height
+            rgb_full[row, :] = (60, 60, 80)
+        for x in range(0, info.width, 40):
+            offset = (t * 2) % 40
+            col = (x + offset) % info.width
+            rgb_full[:, col] = (60, 60, 80)
+        # Label
+        cy, cx = info.height // 2, info.width // 2
+        rgb_full[cy - 2:cy + 2, cx - 40:cx + 40] = (100, 140, 200)
+
         depth_registered = np.ones((info.height, info.width), dtype=np.float32) * 2000.0
         return self._process_frame(rgb_full, depth_registered)
 

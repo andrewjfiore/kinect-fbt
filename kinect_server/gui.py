@@ -884,7 +884,8 @@ class FBTServerGUI:
                     "Calibration", f"Done! Saved to {args['cal_file']}"))
             except Exception as e:
                 logging.error(f"Calibration failed: {e}")
-                self.root.after(0, lambda: messagebox.showerror("Calibration Error", str(e)))
+                err_msg = str(e)
+                self.root.after(0, lambda msg=err_msg: messagebox.showerror("Calibration Error", msg))
 
         threading.Thread(target=do_cal, daemon=True).start()
 
