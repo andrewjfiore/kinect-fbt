@@ -4,6 +4,11 @@ kinect_server/server.py — FBT server entry point.
 Orchestrates camera capture, multi-camera fusion, and OSC output.
 Supports Kinect v1 (Xbox 360) and v2 (Xbox One), including mixed setups.
 """
+import os as _os
+# Suppress TFLite C++ warnings from MediaPipe's internal inference engine
+# (e.g. "Feedback manager requires a model with a single signature inference")
+_os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
 import argparse
 import logging
 import sys

@@ -10,6 +10,10 @@ Features:
 
 References: SlimeVR Server GUI, KinectToVR (K2EX) UI patterns.
 """
+import os as _os
+# Suppress TFLite C++ warnings from MediaPipe's internal inference engine
+_os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
 import platform
 import queue
 import sys

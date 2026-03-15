@@ -3,6 +3,10 @@ KinectCamera: per-device capture + depth-informed landmark extraction.
 Supports both Kinect v1 (640x480) and v2 (1920x1080) with per-camera intrinsics.
 Uses MediaPipe Pose for 2D landmarks.
 """
+import os as _os
+# Suppress TFLite C++ warnings from MediaPipe's internal inference engine
+_os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
 import logging
 import queue
 import subprocess
