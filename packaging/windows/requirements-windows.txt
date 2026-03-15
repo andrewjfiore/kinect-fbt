@@ -10,5 +10,8 @@ Pillow>=10.0.0
 # Windows-specific: Kinect for Windows SDK v2 bindings
 pykinect2>=0.1.0
 
+# MediaPipe dependency (required at runtime)
+matplotlib>=3.7.0
+
 # Build tools
 pyinstaller>=6.0.0

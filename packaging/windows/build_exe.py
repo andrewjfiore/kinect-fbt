@@ -35,6 +35,8 @@ PyInstaller.__main__.run([
     "--hidden-import", "PIL.ImageTk",
     "--hidden-import", "pythonosc",
     "--hidden-import", "flask",
+    "--hidden-import", "matplotlib",
+    "--hidden-import", "matplotlib.pyplot",
     # MediaPipe data files
     "--collect-data", "mediapipe",
     # Output
