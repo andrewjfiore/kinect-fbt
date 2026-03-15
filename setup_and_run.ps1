@@ -63,6 +63,29 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "Dependencies installed" -ForegroundColor Green
 
+# Patch pykinect2 for 64-bit Python (tagSTATSTG size is 80 on 64-bit, not 72)
+Write-Host "Patching pykinect2 for 64-bit compatibility..." -ForegroundColor Yellow
+$patchScript = @"
+import site, os, re
+for sp in site.getsitepackages():
+    f = os.path.join(sp, 'pykinect2', 'PyKinectV2.py')
+    if os.path.isfile(f):
+        txt = open(f, 'r').read()
+        patched = txt.replace(
+            'assert sizeof(tagSTATSTG) == 72, sizeof(tagSTATSTG)',
+            '# Patched for 64-bit: allow size 72 or 80\nassert sizeof(tagSTATSTG) in (72, 80), sizeof(tagSTATSTG)'
+        )
+        if patched != txt:
+            open(f, 'w').write(patched)
+            print(f'Patched: {f}')
+        else:
+            print('Already patched or assertion not found')
+        break
+else:
+    print('pykinect2/PyKinectV2.py not found in site-packages')
+"@
+& python -c $patchScript
+
 # Verify pykinect2
 try {
     & python -c "from pykinect2 import PyKinectV2; print('pykinect2 OK')"
