@@ -166,7 +166,8 @@ class LinuxFreenect2Backend(KinectBackend):
 
     def get_frames(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         fn2 = self._fn2
-        frames = self._listener.waitForNewFrame(timeout=100)
+        # waitForNewFrame takes timeout in ms as a positional argument
+        frames = self._listener.waitForNewFrame(100)
         if frames is None:
             return None
         try:
@@ -393,6 +394,7 @@ class WindowsKinect2Backend(KinectBackend):
         Map 512x424 depth to 1920x1080 color space using coordinate mapper.
         Uses vectorized numpy operations for performance.
         Reference: https://github.com/Kinect/PyKinect2/blob/master/pykinect2/PyKinectRuntime.py
+        Uses vectorised numpy operations — no Python pixel loops.
         """
         try:
             from pykinect2 import PyKinectV2

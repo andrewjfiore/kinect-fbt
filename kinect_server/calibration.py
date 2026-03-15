@@ -184,8 +184,13 @@ def run_calibration(cameras, filepath: str = "calibration.json"):
     Calibrates adjacent camera pairs that share a view, then chains transforms.
     Supports opposing cameras that can't see the same checkerboard simultaneously.
     """
-    if len(cameras) <= 1:
-        calibration = {cameras[0].device_index: np.eye(4)} if cameras else {}
+    if not cameras:
+        logger.warning("run_calibration called with 0 cameras — returning empty calibration")
+        save_calibration({}, filepath)
+        return {}
+
+    if len(cameras) == 1:
+        calibration = {cameras[0].device_index: np.eye(4)}
         save_calibration(calibration, filepath)
         return calibration
 

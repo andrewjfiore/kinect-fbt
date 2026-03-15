@@ -48,11 +48,13 @@ class OSCOutput:
             print(f"  /fbt/status cameras={cameras_active} joints={joints_tracked} fps={fps:.1f}")
             return
 
-        if self._client:
-            try:
-                self._client._sock.sendto(built.dgram, (self.target_ip, self.target_port))
-            except Exception as e:
-                logger.error(f"OSC send error: {e}")
+        if self._client is None:
+            logger.warning("OSC client not initialised — skipping send")
+            return
+        try:
+            self._client._sock.sendto(built.dgram, (self.target_ip, self.target_port))
+        except Exception as e:
+            logger.error(f"OSC send error: {e}")
 
     def _msg(self, address: str, args: list):
         mb = osc_message_builder.OscMessageBuilder(address=address)

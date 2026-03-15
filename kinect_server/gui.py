@@ -226,26 +226,26 @@ class CameraFeedPanel(tk.LabelFrame):
         # Build pixel position map for drawing limbs
         joint_pixels = {}
 
+        from camera import DEFAULT_V2_INTRINSICS  # import once, outside loop
+        _fx = DEFAULT_V2_INTRINSICS["fx"]
+        _fy = DEFAULT_V2_INTRINSICS["fy"]
+        _cx = DEFAULT_V2_INTRINSICS["cx"]
+        _cy = DEFAULT_V2_INTRINSICS["cy"]
+
         for lm in landmarks:
             if lm is None:
                 continue
             idx = lm.index
             # Re-project 3D back to 2D pixel coords for display
-            # Use the stored pixel visibility approach — approximate from landmark data
             if hasattr(lm, '_px') and hasattr(lm, '_py'):
                 px = int(lm._px * sx)
                 py = int(lm._py * sy)
             else:
                 # Approximate: use x/z and y/z projection
                 if lm.z > 0.01:
-                    # Rough reprojection (camera intrinsics scaled)
-                    from camera import DEFAULT_V2_INTRINSICS
-                    fx = DEFAULT_V2_INTRINSICS["fx"]
-                    fy = DEFAULT_V2_INTRINSICS["fy"]
-                    cx = DEFAULT_V2_INTRINSICS["cx"]
-                    cy = DEFAULT_V2_INTRINSICS["cy"]
-                    px_orig = int(lm.x * fx / lm.z + cx)
-                    py_orig = int(lm.y * fy / lm.z + cy)
+                    # Rough reprojection using default v2 intrinsics (scaled to orig res)
+                    px_orig = int(lm.x * _fx / lm.z + _cx)
+                    py_orig = int(lm.y * _fy / lm.z + _cy)
                     px = int(px_orig * sx)
                     py = int(py_orig * sy)
                 else:
@@ -799,11 +799,12 @@ class FBTServerGUI:
                                     except Exception:
                                         pass
 
+                                cam_obj = next((c for c in cameras if c.device_index == cam_id), None)
                                 self._preview_frames[cam_id] = {
                                     "rgb": frame.rgb_preview,
                                     "landmarks": frame.landmarks,
                                     "bodies": bodies,
-                                    "fps": cameras[cam_id].fps if cam_id < len(cameras) else 0,
+                                    "fps": cam_obj.fps if cam_obj is not None else 0.0,
                                 }
 
                 fps_counter += 1

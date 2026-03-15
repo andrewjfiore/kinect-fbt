@@ -56,6 +56,11 @@ def status():
 
 @app.route("/preview/<int:cam_id>")
 def preview(cam_id: int):
+    """
+    MJPEG preview stream.  Reads from the shared 'preview_frames' dict in state
+    rather than consuming frames from the camera queue (which would starve the
+    main tracking loop).
+    """
     cameras = _state.get("cameras", [])
     cam = next((c for c in cameras if c.device_index == cam_id), None)
     if cam is None:
@@ -63,13 +68,17 @@ def preview(cam_id: int):
 
     def generate():
         while True:
-            frame = cam.get_frame(timeout=0.1)
-            if frame is None or frame.rgb_preview is None:
+            # Read from preview buffer (written by main loop, non-destructive)
+            preview_frames = _state.get("preview_frames", {})
+            frame_data = preview_frames.get(cam_id)
+            if frame_data is None or frame_data.get("rgb") is None:
                 time.sleep(0.05)
                 continue
-            img = cv2.resize(frame.rgb_preview, (960, 540))
+            rgb = frame_data["rgb"]
+            img = cv2.resize(rgb, (960, 540))
             ret, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
             if not ret:
+                time.sleep(0.05)
                 continue
             yield (
                 b"--frame\r\n"

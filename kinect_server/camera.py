@@ -5,6 +5,7 @@ Uses MediaPipe Pose for 2D landmarks.
 """
 import logging
 import queue
+import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
@@ -271,7 +272,8 @@ class KinectCamera:
 
     def _capture_kinect_frame(self) -> Optional[CameraFrame]:
         fn2 = self._fn2
-        frames = self._listener.waitForNewFrame(timeout=100)
+        # waitForNewFrame takes timeout in ms as a positional argument
+        frames = self._listener.waitForNewFrame(100)
         if frames is None:
             return None
 
@@ -383,10 +385,12 @@ class KinectCamera:
         if depth_min <= d <= depth_max:
             return float(d), 1.0
 
-        # 5x5 neighborhood search
+        # 5x5 neighborhood search — skip center (already checked above)
         for r in range(1, 3):
             for dy in range(-r, r + 1):
                 for dx in range(-r, r + 1):
+                    if dx == 0 and dy == 0:
+                        continue  # already checked
                     nx, ny = px + dx, py + dy
                     if 0 <= nx < w and 0 <= ny < h:
                         nd = depth_map[ny, nx]

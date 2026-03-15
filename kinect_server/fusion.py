@@ -3,6 +3,7 @@ MultiCameraFusion: spatial transform + weighted multi-camera fusion + virtual tr
 """
 import logging
 import math
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -56,6 +57,7 @@ class MultiCameraFusion:
         self._origin: Optional[np.ndarray] = None  # 3D offset applied to all output
         self._height_scale: float = 1.0
         self._calibrated_origin = False
+        self._lock = threading.Lock()  # protects _origin, _height_scale, _calibrated_origin
 
     def update(self, frames: List[CameraFrame]) -> Dict[str, FusedJoint]:
         """Fuse new frames from all cameras, return updated joint dict."""
@@ -112,19 +114,25 @@ class MultiCameraFusion:
             joint.is_lost = False
 
         # Auto-calibrate origin on first valid frame
-        if not self._calibrated_origin:
+        with self._lock:
+            need_calibrate = not self._calibrated_origin
+        if need_calibrate:
             self._try_set_origin()
 
         # Return a copy with origin offset and height scale applied
         # (never modify self._joints in-place — that causes cumulative drift)
-        if self._origin is not None:
+        with self._lock:
+            origin = self._origin.copy() if self._origin is not None else None
+            scale = self._height_scale
+
+        if origin is not None:
             output = {}
             for name, joint in self._joints.items():
                 output[name] = FusedJoint(
                     name=joint.name,
-                    x=(joint.x - self._origin[0]) * self._height_scale,
-                    y=(joint.y - self._origin[1]) * self._height_scale,
-                    z=(joint.z - self._origin[2]) * self._height_scale,
+                    x=(joint.x - origin[0]) * scale,
+                    y=(joint.y - origin[1]) * scale,
+                    z=(joint.z - origin[2]) * scale,
                     confidence=joint.confidence,
                     last_seen=joint.last_seen,
                     is_lost=joint.is_lost,
@@ -138,7 +146,8 @@ class MultiCameraFusion:
 
     def recalibrate_origin(self):
         """Reset the world origin (called on /calibrate OSC message)."""
-        self._calibrated_origin = False
+        with self._lock:
+            self._calibrated_origin = False
         self._try_set_origin()
 
     def _try_set_origin(self):
@@ -149,12 +158,13 @@ class MultiCameraFusion:
             hip_y = (lhip.y + rhip.y) / 2
             hip_z = (lhip.z + rhip.z) / 2
             # Target: HIP_CENTER = (0, 1.0, 0)
-            self._origin = np.array([hip_x, hip_y - 1.0, hip_z])
-            self._calibrated_origin = True
-
-            # Compute height scale
-            self._height_scale = self._compute_height_scale()
-            logger.info(f"Origin set: {self._origin}, height_scale={self._height_scale:.3f}")
+            new_origin = np.array([hip_x, hip_y - 1.0, hip_z])
+            new_scale = self._compute_height_scale()
+            with self._lock:
+                self._origin = new_origin
+                self._height_scale = new_scale
+                self._calibrated_origin = True
+            logger.info(f"Origin set: {new_origin}, height_scale={new_scale:.3f}")
 
     def _compute_height_scale(self) -> float:
         """Estimate scale from observed ankle-to-shoulder distance vs expected."""
@@ -176,9 +186,30 @@ class MultiCameraFusion:
         return 1.0
 
     def get_trackers(self) -> List[TrackerData]:
-        """Derive the 5 virtual trackers for VRChat FBT."""
+        """Derive the 5 virtual trackers for VRChat FBT.
+        Uses the origin-corrected joint positions (same as update() return value).
+        """
         trackers = []
-        joints = self._joints
+        with self._lock:
+            origin = self._origin.copy() if self._origin is not None else None
+            scale = self._height_scale
+
+        if origin is not None:
+            # Build origin-corrected view of joints
+            joints = {
+                name: FusedJoint(
+                    name=j.name,
+                    x=(j.x - origin[0]) * scale,
+                    y=(j.y - origin[1]) * scale,
+                    z=(j.z - origin[2]) * scale,
+                    confidence=j.confidence,
+                    last_seen=j.last_seen,
+                    is_lost=j.is_lost,
+                )
+                for name, j in self._joints.items()
+            }
+        else:
+            joints = self._joints
 
         # Tracker 1: HIP_CENTER
         lhip = joints.get("LEFT_HIP")

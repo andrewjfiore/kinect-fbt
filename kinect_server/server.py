@@ -64,6 +64,9 @@ def main():
     # Enumerate cameras
     if args.num_cameras is not None:
         num_cameras = args.num_cameras
+        if num_cameras <= 0:
+            logger.error("--num-cameras must be >= 1")
+            sys.exit(1)
     else:
         num_cameras = enumerate_kinect_devices()
         if num_cameras == 0:
@@ -141,6 +144,8 @@ def main():
         "osc_target": f"{args.target_ip}:{args.target_port}",
         "joints": {},
         "calibration": calibration,
+        # preview_frames: cam_id -> {"rgb": np.ndarray}  (non-destructive, for HTTP debug)
+        "preview_frames": {},
     }
 
     # Debug server
@@ -185,6 +190,11 @@ def main():
                 joints = fusion.update(frames_to_fuse)
                 state["joints"] = joints
                 state["joints_tracked"] = fusion.joints_tracked_count()
+
+                # Update preview frames for HTTP debug server (non-destructive copy)
+                for f in frames:
+                    if f.rgb_preview is not None:
+                        state["preview_frames"][f.camera_id] = {"rgb": f.rgb_preview}
 
                 # Get virtual trackers
                 trackers = fusion.get_trackers()
