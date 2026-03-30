@@ -34,6 +34,33 @@ logger = logging.getLogger(__name__)
 FRAME_CACHE_TTL = 0.15  # 150ms — use cached frame if fresh enough
 
 
+def _cloud_density_score(frame: CameraFrame, num_points: int, stride: int) -> float:
+    """Estimate per-camera cloud confidence from valid depth density."""
+    if frame.depth_frame is None:
+        return 0.0
+    h, w = frame.depth_frame.shape[:2]
+    sampled = max((h // max(stride, 1)) * (w // max(stride, 1)), 1)
+    return float(np.clip(num_points / sampled, 0.0, 1.0))
+
+
+def _pairwise_cloud_consistency_score(a: np.ndarray, b: np.ndarray, sample_n: int = 300) -> float:
+    """Heuristic consistency score between two world-space clouds (0..1).
+
+    Uses median nearest-neighbor distance on random subsets.
+    """
+    if a.shape[0] == 0 or b.shape[0] == 0:
+        return 0.0
+    na = min(sample_n, a.shape[0])
+    nb = min(sample_n, b.shape[0])
+    pa = a[np.random.choice(a.shape[0], na, replace=False)]
+    pb = b[np.random.choice(b.shape[0], nb, replace=False)]
+    d2 = np.sum((pa[:, None, :] - pb[None, :, :]) ** 2, axis=2)
+    nn = np.sqrt(np.min(d2, axis=1))
+    median = float(np.median(nn))
+    # ~5cm median overlap => near 1.0, ~35cm => low confidence.
+    return float(np.clip(np.exp(-median / 0.18), 0.0, 1.0))
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Kinect FBT server for VRChat via OSC")
     p.add_argument("--num-cameras", type=int, default=None,
@@ -67,6 +94,8 @@ def parse_args():
                    help="Point cloud downsample stride (default 4; higher = fewer points, faster)")
     p.add_argument("--web-max-points", type=int, default=50000,
                    help="Max points per camera per frame (default 50000)")
+    p.add_argument("--web-stereo-consistency", action="store_true",
+                   help="Enable pairwise consistency damping for 2-camera point clouds")
     p.add_argument("--dry-run", action="store_true",
                    help="Print OSC messages to stdout instead of sending UDP")
     return p.parse_args()
@@ -205,6 +234,7 @@ def main():
     status_broadcast_time = time.monotonic()
     pc_debug_time = time.monotonic()
     pc_debug_count = 0
+    cloud_conf_ema: Dict[int, float] = {i: 1.0 for i in range(num_cameras)}
 
     logger.info(f"FBT server running at {args.fps}fps → {args.target_ip}:{args.target_port}")
     logger.info(f"Layout: {layout}")
@@ -278,16 +308,36 @@ def main():
                         # Generate point cloud for this camera
                         positions, colors = rgbd_to_pointcloud(
                             rgb_for_pc, f.depth_frame, f.device_info,
+                            ir=f.ir_frame,
                             stride=args.web_stride,
                             max_points=args.web_max_points,
                         )
 
                         if positions.shape[0] == 0:
+                            cloud_conf_ema[f.camera_id] = cloud_conf_ema.get(f.camera_id, 1.0) * 0.9
                             continue
+
+                        # Temporal smoothing on per-camera cloud confidence
+                        density = _cloud_density_score(f, positions.shape[0], args.web_stride)
+                        prev = cloud_conf_ema.get(f.camera_id, density)
+                        ema = prev * 0.8 + density * 0.2
+                        cloud_conf_ema[f.camera_id] = ema
 
                         # Transform to world space using calibration
                         cam_transform = calibration.get(f.camera_id, np.eye(4))
                         world_positions = transform_pointcloud(positions, cam_transform)
+                        # Keep cloud alignment consistent with fused skeleton output
+                        # (same origin offset + user-height normalization).
+                        world_positions = fusion.apply_world_alignment(world_positions)
+
+                        # Use temporal confidence to down-weight unstable camera clouds
+                        keep_count = int(world_positions.shape[0] * np.clip(ema, 0.05, 1.0))
+                        if keep_count < world_positions.shape[0]:
+                            keep_idx = np.random.choice(world_positions.shape[0], keep_count, replace=False)
+                            world_positions = world_positions[keep_idx]
+                            colors = colors[keep_idx]
+                        if world_positions.shape[0] < 100:
+                            continue
 
                         # Send per-camera cloud (only for the scheduled camera this tick)
                         if f.camera_id == scheduled_cam:
@@ -299,20 +349,31 @@ def main():
                             )
                             web_server.broadcast_pointcloud(frame_data)
 
-                        per_cam_clouds.append((world_positions, colors))
+                        per_cam_clouds.append((f.camera_id, world_positions, colors))
+
+                    # Optional stereo-style consistency damping for dual-camera setups
+                    if args.web_stereo_consistency and len(per_cam_clouds) == 2:
+                        c0, p0, col0 = per_cam_clouds[0]
+                        c1, p1, col1 = per_cam_clouds[1]
+                        pair_score = _pairwise_cloud_consistency_score(p0, p1)
+                        cloud_conf_ema[c0] = cloud_conf_ema.get(c0, 1.0) * (0.6 + 0.4 * pair_score)
+                        cloud_conf_ema[c1] = cloud_conf_ema.get(c1, 1.0) * (0.6 + 0.4 * pair_score)
+                        if pair_score < 0.15:
+                            # Extremely inconsistent pair: skip fused cloud this tick.
+                            per_cam_clouds = []
 
                     # Debug: log point cloud generation rate
                     pc_debug_count += 1
                     if now - pc_debug_time >= 5.0:
                         logger.info(f"[PC] {pc_debug_count} clouds in 5s, {len(per_cam_clouds)} cams, clients={web_server.client_count}")
                         if per_cam_clouds:
-                            logger.info(f"[PC] cloud0: {per_cam_clouds[0][0].shape[0]} pts")
+                            logger.info(f"[PC] cloud0: {per_cam_clouds[0][1].shape[0]} pts")
                         pc_debug_count = 0
                         pc_debug_time = now
 
                     # Send fused cloud (every tick, combining all cameras)
                     if per_cam_clouds:
-                        fused_pos, fused_col = merge_pointclouds(per_cam_clouds)
+                        fused_pos, fused_col = merge_pointclouds([(p, c) for _, p, c in per_cam_clouds])
                         # Cap total fused points
                         if fused_pos.shape[0] > args.web_max_points:
                             idx = np.random.choice(fused_pos.shape[0], args.web_max_points, replace=False)

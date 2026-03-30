@@ -265,5 +265,30 @@ class MultiCameraFusion:
 
         return trackers
 
+    def get_world_alignment(self) -> Tuple[Optional[np.ndarray], float]:
+        """Return the currently active world-alignment parameters.
+
+        Returns:
+            (origin, scale)
+            - origin: (3,) ndarray offset in world space, or None if not calibrated yet
+            - scale: scalar height normalization factor
+        """
+        with self._lock:
+            origin = self._origin.copy() if self._origin is not None else None
+            scale = self._height_scale
+        return origin, scale
+
+    def apply_world_alignment(self, positions: np.ndarray) -> np.ndarray:
+        """Apply the same origin/scale correction used for fused joints.
+
+        This keeps point clouds and skeleton data in the same aligned frame.
+        """
+        if positions.size == 0:
+            return positions
+        origin, scale = self.get_world_alignment()
+        if origin is None:
+            return positions
+        return ((positions - origin.reshape(1, 3)) * scale).astype(np.float32)
+
     def joints_tracked_count(self) -> int:
         return sum(1 for j in self._joints.values() if not j.is_lost and j.confidence > 0.2)

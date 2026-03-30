@@ -15,6 +15,7 @@ def rgbd_to_pointcloud(
     rgb: np.ndarray,
     depth: np.ndarray,
     info: DeviceInfo,
+    ir: Optional[np.ndarray] = None,
     stride: int = 4,
     depth_min_mm: Optional[float] = None,
     depth_max_mm: Optional[float] = None,
@@ -22,12 +23,14 @@ def rgbd_to_pointcloud(
     color_mode: str = "depth",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Convert an RGB-D frame pair into a colored point cloud.
+    Convert an RGB-D (optionally IR-assisted) frame pair into a colored point cloud.
 
     Args:
         rgb: BGR image (H, W, 3) uint8 (used only when color_mode="rgb")
         depth: Registered depth map (H, W) float32, millimeters
         info: Camera intrinsics (DeviceInfo)
+        ir: Optional IR image aligned with depth (or approximately aligned).
+            If provided, low-confidence IR pixels are filtered out.
         stride: Downsample factor (e.g. 4 = every 4th pixel in each axis)
         depth_min_mm: Minimum valid depth (default from DeviceInfo)
         depth_max_mm: Maximum valid depth (default from DeviceInfo)
@@ -60,6 +63,25 @@ def rgbd_to_pointcloud(
     yy_v = yy_flat[valid]
     xx_v = xx_flat[valid]
     d_v = d[valid]
+
+    # Optional IR-based confidence filtering
+    if ir is not None and yy_v.size > 0:
+        ir_h, ir_w = ir.shape[:2]
+        if ir_h != h or ir_w != w:
+            iy = np.clip((yy_v.astype(np.float32) * ir_h / h).astype(np.int32), 0, ir_h - 1)
+            ix = np.clip((xx_v.astype(np.float32) * ir_w / w).astype(np.int32), 0, ir_w - 1)
+        else:
+            iy, ix = yy_v, xx_v
+
+        ir_v = ir[iy, ix].astype(np.float32)
+        p05 = np.percentile(ir_v, 5)
+        p95 = np.percentile(ir_v, 95)
+        denom = max(p95 - p05, 1.0)
+        ir_conf = np.clip((ir_v - p05) / denom, 0.0, 1.0)
+        keep = ir_conf > 0.15
+        yy_v = yy_v[keep]
+        xx_v = xx_v[keep]
+        d_v = d_v[keep]
 
     # Unproject to 3D using intrinsics
     fx = info.fx

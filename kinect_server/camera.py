@@ -398,12 +398,14 @@ class KinectCamera:
         try:
             color_frame = frames[fn2.FrameType.Color]
             depth_frame = frames[fn2.FrameType.Depth]
+            ir_frame = frames[fn2.FrameType.Ir]
 
             # RGB: 1920x1080 BGRX
             rgb_full = color_frame.asarray(dtype=np.uint8)[:, :, :3].copy()
 
             # Depth: 512x424 float32 (mm)
             depth_raw = depth_frame.asarray(dtype=np.float32).copy()
+            ir_raw = ir_frame.asarray(dtype=np.float32).copy()
 
             # Registered depth aligned to color space
             undistorted = fn2.Frame(512, 424, 4)
@@ -417,7 +419,7 @@ class KinectCamera:
         # pylibfreenect2 is v2 only
         if self._device_info is None:
             self._device_info = get_v2_device_info()
-        return self._process_frame(rgb_full, depth_registered)
+        return self._process_frame(rgb_full, depth_registered, ir_frame=ir_raw)
 
     _synthetic_frame_count: int = 0
 
