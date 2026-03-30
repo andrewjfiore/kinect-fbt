@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+*.spec
+.gradle/
+quest_app/.gradle/
+quest_app/build/
+quest_app/app/build/
