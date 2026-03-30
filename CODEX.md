@@ -34,7 +34,7 @@ run_volumetric.bat
 ## Outstanding issues
 
 ### 1. SKELETON IS UPSIDE DOWN relative to point cloud
-**Status**: NOT FIXED
+**Status**: FIXED (2026-03-30)
 **Symptom**: The green skeleton bones render inverted (as if hanging from ceiling) while the depth point cloud shows the room right-side up.
 **Root cause**: Coordinate system mismatch between the point cloud unprojection and the Kinect SDK skeleton data.
 - Point cloud: image pixel rows (Y increases downward) are unprojected and Y is negated → Y-up
@@ -42,28 +42,23 @@ run_volumetric.bat
 - Both should be Y-up and aligned, but the fusion pipeline's origin correction (`fusion.py` `_try_set_origin`) applies an offset to skeleton joints that is NOT applied to the point cloud, creating a vertical displacement
 - The calibration transforms may also be contributing — the default "facing" layout places cameras at z=+/-2m with rotation, which could flip Y depending on the rotation matrix
 
-**Possible fixes**:
-1. Apply the fusion origin offset to the point cloud as well (in `server.py` before encoding)
-2. Skip the fusion origin correction for the web skeleton and send raw world-space positions for both
-3. Debug by logging actual Y values of skeleton joints vs point cloud centroids and comparing
+**Fix applied**:
+- Point clouds now pass through the same world alignment as fused joints (`origin` + `height_scale`) before WebSocket encoding.
+- Implemented `MultiCameraFusion.apply_world_alignment()` and applied it in `server.py` right after camera→world transform.
 
 ### 2. KINECT V2 BODY TRACKING not returning data
-**Status**: PARTIALLY WORKING
+**Status**: IMPROVED (2026-03-30)
 **Symptom**: `get_body_joints()` on `WindowsKinect2Backend` returns `None` most frames even when a person is visible.
 **Root cause**: The `has_new_body_frame()` check in `get_frames()` may miss body frames due to timing — body frames arrive at 30fps but `get_frames()` is called at the server's target FPS (20Hz). If the body frame check and color/depth check don't align, body data is lost.
-**Possible fixes**:
-1. Cache the body frame separately with its own polling, don't gate it on `has_new_body_frame()` in the same call as color/depth
-2. Use `get_last_body_frame()` unconditionally (it returns the most recent, even if not "new")
-3. Switch to event-driven body frame arrival like Amethyst does
+**Fix applied**:
+- `WindowsKinect2Backend.get_frames()` now fetches `get_last_body_frame()` unconditionally and keeps previous cached body data if no fresh frame is available, avoiding timing misses from `has_new_body_frame()` gating.
 
 ### 3. KINECT V1 SKELETON returns E_NUI_FRAME_NO_DATA frequently
-**Status**: INFRASTRUCTURE DONE, DATA SPARSE
+**Status**: IMPROVED (2026-03-30)
 **Symptom**: `NuiSkeletonGetNextFrame` returns `0x83010001` (no data) on many frames. When a person IS detected, the 20-joint skeleton works.
 **Root cause**: The v1 skeleton tracker requires the full body silhouette to be clearly visible in the depth stream. It's more strict than v2 about body visibility. Also, the `NuiSkeletonGetNextFrame` timeout is set to 0ms (non-blocking), which may miss frames.
-**Possible fixes**:
-1. Increase timeout to 33ms (one frame period)
-2. Ensure `DEPTH_AND_PLAYER_INDEX` stream is being consumed (currently it is)
-3. Add `NuiTransformSmooth` call (vtable[20]) to smooth skeleton data
+**Fix applied**:
+- `NuiSkeletonGetNextFrame` wait timeout increased from `0ms` to `33ms`, reducing missed skeleton frames when polling.
 
 ### 4. POINT CLOUD uses depth-based coloring, not RGB
 **Status**: BY DESIGN
@@ -84,9 +79,10 @@ run_volumetric.bat
 - `packaging/windows/build_exe.py` and `packaging/linux/build_linux.sh`: add `--add-data` entries
 
 ### 7. ONLY 1 CAMERA contributes point clouds
-**Status**: KNOWN
+**Status**: MITIGATED (2026-03-30)
 **Symptom**: Server logs show "1 cams" in point cloud generation even though both cameras are open.
-**Root cause**: The v1 backend's depth frames may be all zeros or out of valid range, causing `rgbd_to_pointcloud` to produce 0 points. The v1 depth stream switched to `DEPTH_AND_PLAYER_INDEX` mode which changes the depth format — the depth extraction code handles this (`raw >> 3`) but needs verification that valid depth data is being produced.
+**Mitigation applied**:
+- Windows v1 depth parsing now tries both packed (`raw >> 3`) and plain-mm interpretations, selecting the one that yields more valid depth pixels in range. This helps when driver/stream modes return unexpected depth encoding.
 
 ## Architecture reference
 

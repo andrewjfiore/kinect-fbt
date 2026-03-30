@@ -566,10 +566,13 @@ class WindowsKinect2Backend(KinectBackend):
             # This is the Windows equivalent of libfreenect2's registration
             depth_color = self._map_depth_to_color(depth_512)
 
-            # Also grab body frame if available
-            self._last_bodies = None
-            if self._kinect.has_new_body_frame():
+            # Body frames are time-decoupled from color/depth; cache latest body frame
+            # unconditionally so slower server loops don't miss tracking data.
+            try:
                 self._last_bodies = self._kinect.get_last_body_frame()
+            except Exception:
+                # Keep previous cached body frame when no new data is available yet.
+                pass
 
             return rgb, depth_color
         except Exception as e:
@@ -887,7 +890,8 @@ class WindowsKinectV1Backend(KinectBackend):
             ctypes.c_ulong, ctypes.c_void_p
         )(self._vtbl[19])
 
-        hr = NuiSkeletonGetNextFrame(self._sensor_ptr, ctypes.c_ulong(0), ctypes.byref(skel_buf))
+        # 33ms ~= one 30 FPS frame; avoids starving the skeleton stream when polling.
+        hr = NuiSkeletonGetNextFrame(self._sensor_ptr, ctypes.c_ulong(33), ctypes.byref(skel_buf))
         if hr != 0:
             return None
 
@@ -1019,8 +1023,17 @@ class WindowsKinectV1Backend(KinectBackend):
                 return None
             buf = (ctypes.c_uint16 * (640 * 480)).from_address(pbits)
             raw = np.frombuffer(buf, dtype=np.uint16).reshape((480, 640)).copy()
-            # Extract depth in mm (shift right 3 to remove player index bits)
-            depth_mm = (raw >> 3).astype(np.float32)
+            # Kinect v1 depth may arrive as DEPTH_AND_PLAYER_INDEX packed values
+            # (depth<<3 | player_idx), but some drivers expose plain millimeters.
+            packed_mm = (raw >> 3).astype(np.float32)
+            plain_mm = raw.astype(np.float32)
+
+            packed_valid = (packed_mm >= V1_DEPTH_MIN_MM) & (packed_mm <= V1_DEPTH_MAX_MM)
+            plain_valid = (plain_mm >= V1_DEPTH_MIN_MM) & (plain_mm <= V1_DEPTH_MAX_MM)
+            # Prefer whichever interpretation yields more plausible depth pixels.
+            use_plain = plain_valid.sum() > packed_valid.sum()
+            depth_mm = plain_mm if use_plain else packed_mm
+
             # Clamp valid range
             depth_mm[depth_mm < V1_DEPTH_MIN_MM] = 0.0
             depth_mm[depth_mm > V1_DEPTH_MAX_MM] = 0.0
