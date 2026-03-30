@@ -7,6 +7,10 @@ import PyInstaller.__main__
 import os
 import sys
 
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 KINECT_SERVER = os.path.join(ROOT, "kinect_server")
 
@@ -47,5 +51,5 @@ PyInstaller.__main__.run([
     *(["--icon", os.path.join(ROOT, "icon.ico")] if os.path.exists(os.path.join(ROOT, "icon.ico")) else []),
 ])
 
-print("\n✅ Build complete! Output: dist/FBT-Server/")
+print("\n[DONE] Build complete! Output: dist/FBT-Server/")
 print("Run: dist/FBT-Server/FBT-Server.exe")

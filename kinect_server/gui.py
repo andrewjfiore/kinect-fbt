@@ -97,6 +97,61 @@ PREVIEW_W = 480
 PREVIEW_H = 270
 PREVIEW_FPS = 15
 
+# Friendly names for the joints we display in the table
+JOINT_DISPLAY_NAMES = {
+    0:  "Nose",
+    11: "L.Shoulder", 12: "R.Shoulder",
+    13: "L.Elbow",    14: "R.Elbow",
+    15: "L.Wrist",    16: "R.Wrist",
+    23: "L.Hip",      24: "R.Hip",
+    25: "L.Knee",     26: "R.Knee",
+    27: "L.Ankle",    28: "R.Ankle",
+    29: "L.Heel",     30: "R.Heel",
+    31: "L.Foot",     32: "R.Foot",
+}
+JOINT_TABLE_ORDER = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+
+
+def _get_cv2_backend() -> str:
+    """Return 'cuda' if OpenCV CUDA is available, else 'cpu'."""
+    try:
+        mat = cv2.cuda.GpuMat()
+        mat.upload(np.zeros((10, 10), dtype=np.uint8))
+        return "cuda"
+    except Exception:
+        return "cpu"
+
+_CV2_BACKEND = _get_cv2_backend()
+
+
+def depth_to_heatmap(depth_frame: np.ndarray, min_mm: float = 500, max_mm: float = 4000) -> np.ndarray:
+    """
+    Convert depth frame to Kinect Studio-style color heatmap.
+    Close = warm (red/orange), Far = cool (blue/purple), depth=0 or out-of-range = black.
+    Returns BGR uint8 (H, W, 3).
+    """
+    d = depth_frame.astype(np.float32)
+    valid = d > 0
+    normalized = np.zeros_like(d)
+    normalized[valid] = np.clip((d[valid] - min_mm) / (max_mm - min_mm), 0, 1)
+
+    # OpenCV HSV hue range is 0-179.  Map: close=0 (red), far=120 (blue).
+    hue = (normalized * 120).astype(np.uint8)
+    sat = np.where(valid, 200, 0).astype(np.uint8)
+    val = np.where(valid, 255, 0).astype(np.uint8)
+
+    hsv = np.stack([hue, sat, val], axis=2)
+
+    if _CV2_BACKEND == "cuda":
+        try:
+            gpu_hsv = cv2.cuda.GpuMat()
+            gpu_hsv.upload(hsv)
+            gpu_bgr = cv2.cuda.cvtColor(gpu_hsv, cv2.COLOR_HSV2BGR)
+            return gpu_bgr.download()
+        except Exception:
+            pass
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
 
 class StatusDot(tk.Canvas):
     def __init__(self, parent, **kw):
@@ -121,17 +176,22 @@ class ConfBar(tk.Canvas):
 
 # ── Camera Feed Panel ────────────────────────────────────────────────────────
 class CameraFeedPanel(tk.LabelFrame):
-    """Live camera feed preview with skeleton overlay and body selection."""
+    """Live camera feed preview with view mode toggle (2D/IR/3D), skeleton overlay,
+    body selection, and live joint position table."""
 
-    def __init__(self, parent, cam_id: int, **kw):
+    VIEW_MODES = ("2D", "IR", "3D")
+
+    def __init__(self, parent, cam_id: int, has_ir: bool = True, **kw):
         super().__init__(parent, text=f"Camera {cam_id}", bg=BG2, fg=TEXT,
                          font=FONT_B, relief="flat", padx=4, pady=4, **kw)
         self.cam_id = cam_id
         self._photo = None
-        self._bodies: List[dict] = []  # detected bodies with bounding boxes
-        self._selected_body: int = 0   # index of selected body
+        self._bodies: List[dict] = []
+        self._selected_body: int = 0
+        self._view_mode: str = "2D"
+        self._has_ir = has_ir
 
-        # Top info bar
+        # ── Top info bar ────────────────────────────────────────────────────
         info = tk.Frame(self, bg=BG2)
         info.pack(fill="x", pady=(0, 2))
         self.lbl_cam_id = tk.Label(info, text=f"Cam {cam_id}", font=FONT_SM,
@@ -144,7 +204,6 @@ class CameraFeedPanel(tk.LabelFrame):
                                  bg=BG2, fg=YELLOW, anchor="e")
         self.lbl_body.pack(side="right", padx=(0, 8))
 
-        # Body selector dropdown
         self.var_body = tk.StringVar(value="Auto (nearest)")
         self.body_menu = ttk.Combobox(info, textvariable=self.var_body,
                                       values=["Auto (nearest)"], state="readonly",
@@ -152,85 +211,198 @@ class CameraFeedPanel(tk.LabelFrame):
         self.body_menu.pack(side="right", padx=(0, 4))
         self.body_menu.bind("<<ComboboxSelected>>", self._on_body_select)
 
-        # Canvas for video feed
+        # ── View mode buttons ───────────────────────────────────────────────
+        mode_bar = tk.Frame(self, bg=BG2)
+        mode_bar.pack(fill="x", pady=(0, 2))
+        tk.Label(mode_bar, text="View:", font=FONT_SM, bg=BG2, fg=SUBTEXT).pack(side="left")
+        self._mode_btns: dict = {}
+        for mode in self.VIEW_MODES:
+            state = "normal"
+            if mode == "IR" and not has_ir:
+                state = "disabled"
+            btn = tk.Button(
+                mode_bar, text=mode, font=FONT_SM,
+                bg=ACCENT if mode == "2D" else BG3,
+                fg=TEXT, relief="flat", padx=8, pady=2,
+                cursor="hand2", state=state,
+                command=lambda m=mode: self._set_view_mode(m),
+            )
+            btn.pack(side="left", padx=1)
+            self._mode_btns[mode] = btn
+
+        # GPU indicator
+        gpu_txt = "GPU" if _CV2_BACKEND == "cuda" else "CPU"
+        gpu_col = GREEN if _CV2_BACKEND == "cuda" else SUBTEXT
+        tk.Label(mode_bar, text=gpu_txt, font=FONT_SM, bg=BG2, fg=gpu_col).pack(side="right", padx=4)
+
+        # ── Canvas for video feed ───────────────────────────────────────────
         self.canvas = tk.Canvas(self, width=PREVIEW_W, height=PREVIEW_H,
                                 bg="#0a0a14", highlightthickness=0)
         self.canvas.pack()
         self.canvas.bind("<Button-1>", self._on_canvas_click)
-
-        # Placeholder text
         self.canvas.create_text(PREVIEW_W // 2, PREVIEW_H // 2,
                                 text="No feed", fill=SUBTEXT, font=FONT,
                                 tags="placeholder")
 
+        # ── Joint position table ────────────────────────────────────────────
+        tbl_frame = tk.LabelFrame(self, text="Joints", bg=BG2, fg=SUBTEXT,
+                                  font=FONT_SM, relief="flat", padx=2, pady=2)
+        tbl_frame.pack(fill="x", pady=(2, 0))
+
+        hdr_row = tk.Frame(tbl_frame, bg=BG2)
+        hdr_row.pack(fill="x")
+        for col, w in [("Joint", 10), ("X", 7), ("Y", 7), ("Z", 7), ("Conf", 6)]:
+            tk.Label(hdr_row, text=col, font=FONT_SM, bg=BG3, fg=SUBTEXT,
+                     width=w, anchor="w", relief="flat").pack(side="left", padx=1)
+
+        self._joint_rows: dict = {}  # idx -> (frame, labels...)
+        scroll_frame = tk.Frame(tbl_frame, bg=BG2, height=120)
+        scroll_frame.pack(fill="x")
+        scroll_frame.pack_propagate(False)
+        self._joint_container = scroll_frame
+
+        for idx in JOINT_TABLE_ORDER:
+            name = JOINT_DISPLAY_NAMES.get(idx, f"J{idx}")
+            row_f = tk.Frame(scroll_frame, bg=BG2)
+            row_f.pack(fill="x")
+            lbl_name = tk.Label(row_f, text=name, font=FONT_SM, bg=BG2, fg=SUBTEXT,
+                                width=10, anchor="w")
+            lbl_name.pack(side="left", padx=1)
+            lbl_x = tk.Label(row_f, text="—", font=FONT_SM, bg=BG2, fg=SUBTEXT, width=7, anchor="e")
+            lbl_x.pack(side="left", padx=1)
+            lbl_y = tk.Label(row_f, text="—", font=FONT_SM, bg=BG2, fg=SUBTEXT, width=7, anchor="e")
+            lbl_y.pack(side="left", padx=1)
+            lbl_z = tk.Label(row_f, text="—", font=FONT_SM, bg=BG2, fg=SUBTEXT, width=7, anchor="e")
+            lbl_z.pack(side="left", padx=1)
+            lbl_c = tk.Label(row_f, text="—", font=FONT_SM, bg=BG2, fg=SUBTEXT, width=6, anchor="e")
+            lbl_c.pack(side="left", padx=1)
+            self._joint_rows[idx] = (lbl_name, lbl_x, lbl_y, lbl_z, lbl_c)
+
+    def _set_view_mode(self, mode: str):
+        self._view_mode = mode
+        for m, btn in self._mode_btns.items():
+            btn.config(bg=ACCENT if m == mode else BG3)
+
     def update_feed(self, rgb_frame: Optional[np.ndarray],
                     landmarks: Optional[list] = None,
                     bodies: Optional[List[dict]] = None,
-                    fps: float = 0.0):
-        """Update the camera feed display with optional skeleton overlay."""
+                    fps: float = 0.0,
+                    depth_frame: Optional[np.ndarray] = None,
+                    ir_frame: Optional[np.ndarray] = None):
+        """Update the camera feed display for the current view mode."""
         if Image is None or ImageTk is None:
             return
 
         self.lbl_fps.config(text=f"{fps:.0f} FPS")
 
-        if rgb_frame is None:
+        # Update joint table regardless of view mode
+        if landmarks:
+            self._update_joint_table(landmarks)
+
+        # Build the display frame for the selected view mode
+        display_frame = self._build_display_frame(
+            rgb_frame, depth_frame, ir_frame, landmarks, bodies)
+
+        if display_frame is None:
             return
 
         self.canvas.delete("placeholder")
-
-        # Resize to preview dimensions
-        img = cv2.resize(rgb_frame, (PREVIEW_W, PREVIEW_H))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        h_orig, w_orig = rgb_frame.shape[:2]
-        sx = PREVIEW_W / w_orig
-        sy = PREVIEW_H / h_orig
-
-        # Draw body bounding boxes
-        if bodies:
-            self._bodies = bodies
-            body_labels = ["Auto (nearest)"]
-            for i, body in enumerate(bodies):
-                selected = (i == self._selected_body)
-                bbox = body.get("bbox")  # (x1, y1, x2, y2) in original coords
-                if bbox:
-                    x1 = int(bbox[0] * sx)
-                    y1 = int(bbox[1] * sy)
-                    x2 = int(bbox[2] * sx)
-                    y2 = int(bbox[3] * sy)
-                    color = (0, 255, 0) if selected else (100, 100, 255)
-                    thickness = 2 if selected else 1
-                    cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
-                    label = f"Body {i + 1}"
-                    if selected:
-                        label += " (selected)"
-                    cv2.putText(img, label, (x1, y1 - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-                    body_labels.append(f"Body {i + 1}")
-
-            self.body_menu["values"] = body_labels
-            self.lbl_body.config(text=f"{len(bodies)} bodies")
-        else:
-            self._bodies = []
-            self.lbl_body.config(text="")
-
-        # Draw skeleton overlay
-        if landmarks:
-            self._draw_skeleton_overlay(img, landmarks, sx, sy, w_orig, h_orig)
-
-        # Convert to PhotoImage
-        pil_img = Image.fromarray(img)
-        self._photo = ImageTk.PhotoImage(pil_img)
         self.canvas.delete("all")
+        pil_img = Image.fromarray(display_frame)
+        self._photo = ImageTk.PhotoImage(pil_img)
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
 
+    def _build_display_frame(self, rgb_frame, depth_frame, ir_frame,
+                              landmarks, bodies) -> Optional[np.ndarray]:
+        """Build the PREVIEW_W x PREVIEW_H RGB display array for current view mode."""
+        mode = self._view_mode
+
+        if mode == "3D":
+            if depth_frame is None:
+                if rgb_frame is None:
+                    return None
+                # Fallback to RGB if no depth
+                base = cv2.resize(rgb_frame, (PREVIEW_W, PREVIEW_H))
+                base = cv2.cvtColor(base, cv2.COLOR_BGR2RGB)
+                cv2.putText(base, "No depth data", (8, 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 80, 80), 1)
+                return base
+            heatmap = depth_to_heatmap(depth_frame)
+            img = cv2.resize(heatmap, (PREVIEW_W, PREVIEW_H))
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            h_orig, w_orig = depth_frame.shape[:2]
+            if landmarks:
+                self._draw_skeleton_overlay(img, landmarks, PREVIEW_W / w_orig,
+                                            PREVIEW_H / h_orig, w_orig, h_orig,
+                                            show_depth_labels=True,
+                                            depth_frame=depth_frame)
+            return img
+
+        elif mode == "IR":
+            if ir_frame is None:
+                if rgb_frame is None:
+                    return None
+                base = cv2.resize(rgb_frame, (PREVIEW_W, PREVIEW_H))
+                base = cv2.cvtColor(base, cv2.COLOR_BGR2RGB)
+                cv2.putText(base, "IR not available", (8, 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 80), 1)
+                return base
+            # Normalize uint16 IR → uint8 with warm tint
+            ir_f = ir_frame.astype(np.float32)
+            p99 = np.percentile(ir_f[ir_f > 0], 99) if ir_f.max() > 0 else 65535
+            ir_norm = np.clip(ir_f / max(p99, 1), 0, 1)
+            ir8 = (ir_norm * 255).astype(np.uint8)
+            # Warm tint: boost red channel slightly
+            bgr = cv2.cvtColor(ir8, cv2.COLOR_GRAY2BGR)
+            bgr[:, :, 2] = np.clip(bgr[:, :, 2].astype(np.int32) + 30, 0, 255).astype(np.uint8)
+            img = cv2.resize(bgr, (PREVIEW_W, PREVIEW_H))
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            h_orig, w_orig = ir_frame.shape[:2]
+            if landmarks:
+                self._draw_skeleton_overlay(img, landmarks, PREVIEW_W / w_orig,
+                                            PREVIEW_H / h_orig, w_orig, h_orig)
+            return img
+
+        else:  # 2D / RGB
+            if rgb_frame is None:
+                return None
+            img = cv2.resize(rgb_frame, (PREVIEW_W, PREVIEW_H))
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            h_orig, w_orig = rgb_frame.shape[:2]
+            sx, sy = PREVIEW_W / w_orig, PREVIEW_H / h_orig
+
+            if bodies:
+                self._bodies = bodies
+                body_labels = ["Auto (nearest)"]
+                for i, body in enumerate(bodies):
+                    selected = (i == self._selected_body)
+                    bbox = body.get("bbox")
+                    if bbox:
+                        x1, y1, x2, y2 = (int(bbox[0] * sx), int(bbox[1] * sy),
+                                           int(bbox[2] * sx), int(bbox[3] * sy))
+                        color = (0, 255, 0) if selected else (100, 100, 255)
+                        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2 if selected else 1)
+                        cv2.putText(img, f"Body {i + 1}" + (" (sel)" if selected else ""),
+                                    (x1, max(y1 - 5, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                        body_labels.append(f"Body {i + 1}")
+                self.body_menu["values"] = body_labels
+                self.lbl_body.config(text=f"{len(bodies)} bodies")
+            else:
+                self._bodies = []
+                self.lbl_body.config(text="")
+
+            if landmarks:
+                self._draw_skeleton_overlay(img, landmarks, sx, sy, w_orig, h_orig)
+            return img
+
     def _draw_skeleton_overlay(self, img: np.ndarray, landmarks: list,
-                               sx: float, sy: float,
-                               w_orig: int, h_orig: int):
-        """Draw skeleton joints and limb connections on the preview image."""
-        # Build pixel position map for drawing limbs
+                               sx: float, sy: float, w_orig: int, h_orig: int,
+                               show_depth_labels: bool = False,
+                               depth_frame: Optional[np.ndarray] = None):
+        """Draw skeleton joints and limb connections on a preview-sized image."""
         joint_pixels = {}
 
-        from camera import DEFAULT_V2_INTRINSICS  # import once, outside loop
+        from camera import DEFAULT_V2_INTRINSICS
         _fx = DEFAULT_V2_INTRINSICS["fx"]
         _fy = DEFAULT_V2_INTRINSICS["fy"]
         _cx = DEFAULT_V2_INTRINSICS["cx"]
@@ -240,73 +412,88 @@ class CameraFeedPanel(tk.LabelFrame):
             if lm is None:
                 continue
             idx = lm.index
-            # Re-project 3D back to 2D pixel coords for display
-            if hasattr(lm, '_px') and hasattr(lm, '_py'):
-                px = int(lm._px * sx)
-                py = int(lm._py * sy)
+            if lm.z > 0.01:
+                px_orig = int(lm.x * _fx / lm.z + _cx)
+                py_orig = int(lm.y * _fy / lm.z + _cy)
+                px = int(px_orig * sx)
+                py = int(py_orig * sy)
             else:
-                # Approximate: use x/z and y/z projection
-                if lm.z > 0.01:
-                    # Rough reprojection using default v2 intrinsics (scaled to orig res)
-                    px_orig = int(lm.x * _fx / lm.z + _cx)
-                    py_orig = int(lm.y * _fy / lm.z + _cy)
-                    px = int(px_orig * sx)
-                    py = int(py_orig * sy)
-                else:
-                    continue
+                continue
 
             px = max(0, min(px, PREVIEW_W - 1))
             py = max(0, min(py, PREVIEW_H - 1))
             joint_pixels[idx] = (px, py)
 
-            # Color by confidence
             conf = lm.depth_confidence
             if conf >= 0.7:
-                color = (0, 255, 0)    # green = high
+                color = (0, 255, 0)
             elif conf >= 0.3:
-                color = (0, 255, 255)  # yellow = medium
+                color = (0, 255, 255)
             else:
-                color = (0, 0, 255)    # red = low
+                color = (0, 0, 255)
 
             cv2.circle(img, (px, py), 4, color, -1)
             cv2.circle(img, (px, py), 5, color, 1)
 
-        # Draw limb connections
+            if show_depth_labels and idx in JOINT_DISPLAY_NAMES:
+                label = f"{JOINT_DISPLAY_NAMES[idx]} {lm.z:.2f}m"
+                cv2.putText(img, label, (px + 6, py),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.28, (230, 230, 230), 1)
+
         for (a, b) in LIMB_CONNECTIONS:
             if a in joint_pixels and b in joint_pixels:
-                pa = joint_pixels[a]
-                pb = joint_pixels[b]
-                cv2.line(img, pa, pb, (200, 200, 200), 1, cv2.LINE_AA)
+                cv2.line(img, joint_pixels[a], joint_pixels[b],
+                         (200, 200, 200), 1, cv2.LINE_AA)
+
+    def _update_joint_table(self, landmarks: list):
+        for idx in JOINT_TABLE_ORDER:
+            if idx >= len(landmarks):
+                continue
+            lm = landmarks[idx]
+            row = self._joint_rows.get(idx)
+            if row is None:
+                continue
+            lbl_name, lbl_x, lbl_y, lbl_z, lbl_c = row
+            if lm is None:
+                lbl_x.config(text="—", fg=SUBTEXT)
+                lbl_y.config(text="—", fg=SUBTEXT)
+                lbl_z.config(text="—", fg=SUBTEXT)
+                lbl_c.config(text="—", fg=SUBTEXT)
+            else:
+                conf_pct = int(lm.depth_confidence * 100)
+                if conf_pct >= 80:
+                    conf_col = GREEN
+                elif conf_pct >= 50:
+                    conf_col = YELLOW
+                else:
+                    conf_col = RED
+                lbl_x.config(text=f"{lm.x:+.2f}", fg=TEXT)
+                lbl_y.config(text=f"{lm.y:+.2f}", fg=TEXT)
+                lbl_z.config(text=f"{lm.z:+.2f}", fg=TEXT)
+                lbl_c.config(text=f"{conf_pct}%", fg=conf_col)
 
     def _on_body_select(self, event):
         val = self.var_body.get()
         if val == "Auto (nearest)":
-            self._selected_body = -1  # auto
+            self._selected_body = -1
         else:
             try:
-                idx = int(val.split(" ")[1]) - 1
-                self._selected_body = idx
+                self._selected_body = int(val.split(" ")[1]) - 1
             except (ValueError, IndexError):
                 self._selected_body = -1
 
     def _on_canvas_click(self, event):
-        """Click on a bounding box to select that body."""
         if not self._bodies:
             return
-        # Check if click is inside any bounding box
         for i, body in enumerate(self._bodies):
             bbox = body.get("bbox")
             if not bbox:
                 continue
-            # Scale bbox to preview coords
             h_orig = body.get("frame_h", 1080)
             w_orig = body.get("frame_w", 1920)
-            sx = PREVIEW_W / w_orig
-            sy = PREVIEW_H / h_orig
-            x1 = int(bbox[0] * sx)
-            y1 = int(bbox[1] * sy)
-            x2 = int(bbox[2] * sx)
-            y2 = int(bbox[3] * sy)
+            sx, sy = PREVIEW_W / w_orig, PREVIEW_H / h_orig
+            x1, y1 = int(bbox[0] * sx), int(bbox[1] * sy)
+            x2, y2 = int(bbox[2] * sx), int(bbox[3] * sy)
             if x1 <= event.x <= x2 and y1 <= event.y <= y2:
                 self._selected_body = i
                 self.var_body.set(f"Body {i + 1}")
@@ -683,6 +870,8 @@ class FBTServerGUI:
                             landmarks=data.get("landmarks"),
                             bodies=data.get("bodies"),
                             fps=data.get("fps", 0.0),
+                            depth_frame=data.get("depth"),
+                            ir_frame=data.get("ir"),
                         )
         self.root.after(int(1000 / PREVIEW_FPS), self._poll_preview)
 
@@ -807,6 +996,8 @@ class FBTServerGUI:
                                 cam_obj = next((c for c in cameras if c.device_index == cam_id), None)
                                 self._preview_frames[cam_id] = {
                                     "rgb": frame.rgb_preview,
+                                    "depth": frame.depth_frame,
+                                    "ir": frame.ir_frame,
                                     "landmarks": frame.landmarks,
                                     "bodies": bodies,
                                     "fps": cam_obj.fps if cam_obj is not None else 0.0,

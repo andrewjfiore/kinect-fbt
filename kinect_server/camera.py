@@ -93,7 +93,9 @@ class CameraFrame:
     camera_id: int
     landmarks: List[Optional[Landmark3D]]  # 33 entries, None if not visible
     timestamp: float
-    rgb_preview: Optional[np.ndarray] = None  # full-res for MJPEG
+    rgb_preview: Optional[np.ndarray] = None  # full-res BGR with skeleton overlay
+    depth_frame: Optional[np.ndarray] = None  # raw depth (H, W) float32 mm
+    ir_frame: Optional[np.ndarray] = None     # infrared (H, W) uint16, if available
     device_info: Optional[DeviceInfo] = None  # per-camera intrinsics and metadata
 
 
@@ -436,7 +438,8 @@ class KinectCamera:
                 return result.pose_landmarks.landmark
             return None
 
-    def _process_frame(self, rgb_full: np.ndarray, depth_registered: np.ndarray) -> CameraFrame:
+    def _process_frame(self, rgb_full: np.ndarray, depth_registered: np.ndarray,
+                       ir_frame: Optional[np.ndarray] = None) -> CameraFrame:
         # Use per-camera intrinsics or defaults
         info = self._device_info or get_v2_device_info()
         fx, fy, cx, cy = info.fx, info.fy, info.cx, info.cy
@@ -496,6 +499,8 @@ class KinectCamera:
             landmarks=landmarks_3d,
             timestamp=time.monotonic(),
             rgb_preview=rgb_full,
+            depth_frame=depth_registered.astype(np.float32) if depth_registered is not None else None,
+            ir_frame=ir_frame,
             device_info=info,
         )
 
