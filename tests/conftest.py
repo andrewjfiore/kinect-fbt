@@ -15,6 +15,7 @@ for mod in [
     'mediapipe.tasks.python.vision', 'mediapipe.tasks.python.core',
     'mediapipe.tasks.python.core.base_options',
     'flask',
+    'aiohttp', 'aiohttp.web',
     'tkinter', 'PIL', 'PIL.Image', 'PIL.ImageTk',
 ]:
     sys.modules.setdefault(mod, MagicMock())

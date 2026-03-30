@@ -77,6 +77,26 @@ JOINT_INDICES = {
     "LEFT_FOOT_INDEX": 31, "RIGHT_FOOT_INDEX": 32,
 }
 
+# Kinect SDK joint type → our JOINT_INDICES name mapping
+# Works for both v1 (20 joints) and v2 (25 joints) — same numbering for shared joints
+KINECT_SDK_TO_JOINT_NAME = {
+    3: "NOSE",             # Head (closest equivalent to nose)
+    4: "LEFT_SHOULDER",    # ShoulderLeft
+    8: "RIGHT_SHOULDER",   # ShoulderRight
+    5: "LEFT_ELBOW",       # ElbowLeft
+    9: "RIGHT_ELBOW",      # ElbowRight
+    6: "LEFT_WRIST",       # WristLeft
+    10: "RIGHT_WRIST",     # WristRight
+    12: "LEFT_HIP",        # HipLeft
+    16: "RIGHT_HIP",       # HipRight
+    13: "LEFT_KNEE",       # KneeLeft
+    17: "RIGHT_KNEE",      # KneeRight
+    14: "LEFT_ANKLE",      # AnkleLeft
+    18: "RIGHT_ANKLE",     # AnkleRight
+    15: "LEFT_FOOT_INDEX", # FootLeft (closest equivalent)
+    19: "RIGHT_FOOT_INDEX",# FootRight (closest equivalent)
+}
+
 
 @dataclass
 class Landmark3D:
@@ -94,6 +114,7 @@ class CameraFrame:
     landmarks: List[Optional[Landmark3D]]  # 33 entries, None if not visible
     timestamp: float
     rgb_preview: Optional[np.ndarray] = None  # full-res BGR with skeleton overlay
+    rgb_clean: Optional[np.ndarray] = None    # full-res BGR without skeleton (for point cloud)
     depth_frame: Optional[np.ndarray] = None  # raw depth (H, W) float32 mm
     ir_frame: Optional[np.ndarray] = None     # infrared (H, W) uint16, if available
     device_info: Optional[DeviceInfo] = None  # per-camera intrinsics and metadata
@@ -189,6 +210,7 @@ class KinectCamera:
                 LinuxFreenect2Backend as _LinuxV2Backend,
                 LinuxFreenectV1Backend as _LinuxV1Backend,
                 WindowsKinect2Backend as _WinV2Backend,
+                WindowsKinectV1Backend as _WinV1Backend,
                 DEVICE_TYPE_V1 as _DT_V1, DEVICE_TYPE_V2 as _DT_V2,
                 IS_WINDOWS as _IS_WIN,
             )
@@ -196,7 +218,7 @@ class KinectCamera:
                 backend = _WinV2Backend() if _IS_WIN else _LinuxV2Backend()
                 hw_index = 0  # v2 devices are indexed from 0 within their type
             elif self._device_type == _DT_V1:
-                backend = _LinuxV1Backend()
+                backend = _WinV1Backend() if _IS_WIN else _LinuxV1Backend()
                 hw_index = 0  # v1 devices are indexed from 0 within their type
             else:
                 # Fall back to old auto-detect
@@ -358,7 +380,13 @@ class KinectCamera:
         # Get device info from backend
         if self._device_info is None:
             self._device_info = self._platform_backend.get_device_info()
-        return self._process_frame(rgb_full, depth_registered)
+
+        # Try native skeleton from SDK (much more accurate than MediaPipe)
+        native_joints = None
+        if hasattr(self._platform_backend, 'get_body_joints'):
+            native_joints = self._platform_backend.get_body_joints()
+
+        return self._process_frame(rgb_full, depth_registered, native_skeleton=native_joints)
 
     def _capture_kinect_frame(self) -> Optional[CameraFrame]:
         fn2 = self._fn2
@@ -439,66 +467,94 @@ class KinectCamera:
             return None
 
     def _process_frame(self, rgb_full: np.ndarray, depth_registered: np.ndarray,
-                       ir_frame: Optional[np.ndarray] = None) -> CameraFrame:
-        # Use per-camera intrinsics or defaults
+                       ir_frame: Optional[np.ndarray] = None,
+                       native_skeleton: Optional[list] = None) -> CameraFrame:
         info = self._device_info or get_v2_device_info()
-        fx, fy, cx, cy = info.fx, info.fy, info.cx, info.cy
-
-        # Downsample to 640x480 for MediaPipe (regardless of input resolution)
-        rgb_small = cv2.resize(rgb_full, (640, 480))
-        rgb_mp = cv2.cvtColor(rgb_small, cv2.COLOR_BGR2RGB)
-
-        pose_landmarks = self._run_pose(rgb_mp)
 
         landmarks_3d: List[Optional[Landmark3D]] = [None] * NUM_LANDMARKS
+        has_skeleton = False
 
-        if pose_landmarks:
-            h_full, w_full = rgb_full.shape[:2]
-
-            for idx, lm in enumerate(pose_landmarks):
-                if lm.visibility < 0.5:
+        # ── Priority 1: Native Kinect SDK skeleton (real 3D positions in meters) ──
+        if native_skeleton is not None:
+            for joint in native_skeleton:
+                jt = joint["joint_type"]
+                name = KINECT_SDK_TO_JOINT_NAME.get(jt)
+                if name is None:
+                    continue
+                mp_idx = JOINT_INDICES[name]
+                state = joint["tracking_state"]
+                if state == 0:  # NotTracked
                     continue
 
-                # Map back to full-res pixel coordinates
-                px = int(lm.x * w_full)
-                py = int(lm.y * h_full)
-                px = max(0, min(px, w_full - 1))
-                py = max(0, min(py, h_full - 1))
+                # Kinect SDK gives camera-space meters: x=right, y=up, z=toward-sensor
+                confidence = 1.0 if state == 2 else 0.5  # Tracked vs Inferred
 
-                depth_mm, depth_confidence = self._lookup_depth(depth_registered, px, py, info)
+                landmarks_3d[mp_idx] = Landmark3D(
+                    x=joint["x"],
+                    y=joint["y"],
+                    z=joint["z"],
+                    visibility=confidence,
+                    depth_confidence=confidence,
+                    index=mp_idx,
+                )
+            has_skeleton = any(lm is not None for lm in landmarks_3d)
+            if has_skeleton:
+                logger.debug(f"Camera {self.device_index}: native skeleton — "
+                             f"{sum(1 for lm in landmarks_3d if lm is not None)} joints")
 
-                # Use per-camera intrinsics scaled to full-res image
+        # ── Priority 2: MediaPipe fallback (for non-Kinect cameras or if SDK fails) ──
+        if not has_skeleton:
+            rgb_small = cv2.resize(rgb_full, (640, 480))
+            rgb_mp = cv2.cvtColor(rgb_small, cv2.COLOR_BGR2RGB)
+            pose_landmarks = self._run_pose(rgb_mp)
+
+            if pose_landmarks:
+                h_full, w_full = rgb_full.shape[:2]
                 cam_fx = self._fx * (w_full / self._native_w)
                 cam_fy = self._fy * (h_full / self._native_h)
                 cam_cx = self._cx * (w_full / self._native_w)
                 cam_cy = self._cy * (h_full / self._native_h)
 
-                if depth_confidence > 0:
-                    x_m = (px - cam_cx) * depth_mm / (cam_fx * 1000.0)
-                    y_m = (py - cam_cy) * depth_mm / (cam_fy * 1000.0)
-                    z_m = depth_mm / 1000.0
-                else:
-                    # Monocular fallback using MediaPipe's Z estimate
-                    z_m = abs(lm.z) * 2.0  # rough scale
-                    x_m = (px - cam_cx) * z_m / cam_fx
-                    y_m = (py - cam_cy) * z_m / cam_fy
-                    depth_confidence = 0.1
+                for idx, lm in enumerate(pose_landmarks):
+                    if lm.visibility < 0.5:
+                        continue
+                    px = int(lm.x * w_full)
+                    py = int(lm.y * h_full)
+                    px = max(0, min(px, w_full - 1))
+                    py = max(0, min(py, h_full - 1))
 
-                landmarks_3d[idx] = Landmark3D(
-                    x=x_m, y=y_m, z=z_m,
-                    visibility=lm.visibility,
-                    depth_confidence=depth_confidence,
-                    index=idx,
-                )
+                    depth_mm, depth_confidence = self._lookup_depth(depth_registered, px, py, info)
+                    if depth_confidence > 0:
+                        x_m = (px - cam_cx) * depth_mm / (cam_fx * 1000.0)
+                        y_m = (py - cam_cy) * depth_mm / (cam_fy * 1000.0)
+                        z_m = depth_mm / 1000.0
+                    else:
+                        z_m = abs(lm.z) * 2.0
+                        x_m = (px - cam_cx) * z_m / cam_fx
+                        y_m = (py - cam_cy) * z_m / cam_fy
+                        depth_confidence = 0.1
 
-            # Draw skeleton overlay on full-res preview
+                    landmarks_3d[idx] = Landmark3D(
+                        x=x_m, y=y_m, z=z_m,
+                        visibility=lm.visibility,
+                        depth_confidence=depth_confidence,
+                        index=idx,
+                    )
+                has_skeleton = True
+
+        # Draw skeleton overlay on preview
+        if has_skeleton:
+            rgb_clean = rgb_full.copy()
             self._draw_skeleton(rgb_full, landmarks_3d)
+        else:
+            rgb_clean = rgb_full
 
         return CameraFrame(
             camera_id=self.device_index,
             landmarks=landmarks_3d,
             timestamp=time.monotonic(),
             rgb_preview=rgb_full,
+            rgb_clean=rgb_clean,
             depth_frame=depth_registered.astype(np.float32) if depth_registered is not None else None,
             ir_frame=ir_frame,
             device_info=info,
@@ -569,51 +625,37 @@ def enumerate_kinect_devices() -> int:
 
 def enumerate_kinect_devices_detailed() -> List[KinectDeviceInfo]:
     """Detect all connected Kinect v1 and v2 devices with metadata."""
-    import subprocess
+    from platform_backend import (
+        IS_WINDOWS, IS_LINUX,
+        WindowsKinectV1Backend, WindowsKinect2Backend,
+    )
     devices = []
     global_index = 0
 
-    # Detect v1 devices via USB ID 045e:02ae
-    try:
-        result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
-        v1_count = result.stdout.count("045e:02ae")
-        for i in range(v1_count):
-            devices.append(KinectDeviceInfo(
-                index=global_index,
-                device_type="v1",
-                rgb_resolution=(640, 480),
-                depth_resolution=(640, 480),
-                intrinsics=DEFAULT_V1_INTRINSICS.copy(),
-            ))
-            global_index += 1
-            logger.info(f"Found Kinect v1 device (index {global_index - 1})")
-    except Exception as e:
-        logger.debug(f"lsusb v1 detection failed: {e}")
-
-    # Detect v2 devices via fn2_shim (ctypes wrapper) or pylibfreenect2
-    v2_count = 0
-    try:
-        v2_backend = LinuxFreenect2Backend()
-        v2_count = v2_backend.num_devices()
-        for i in range(v2_count):
-            devices.append(KinectDeviceInfo(
-                index=global_index,
-                device_type="v2",
-                rgb_resolution=(1920, 1080),
-                depth_resolution=(512, 424),
-                intrinsics=DEFAULT_V2_INTRINSICS.copy(),
-            ))
-            global_index += 1
-            logger.info(f"Found Kinect v2 device (index {global_index - 1})")
-    except Exception as e:
-        logger.debug(f"fn2_shim v2 detection failed: {e}")
-
-    if v2_count == 0:
-        # Fallback: check USB IDs for v2 (045e:02c4 preview or 045e:02d8 retail)
+    if IS_WINDOWS:
+        # Windows: use SDK backends for reliable detection
+        # v1 via Kinect10.dll
         try:
-            result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
-            v2_usb = result.stdout.count("045e:02d8") + result.stdout.count("045e:02c4")
-            for i in range(v2_usb):
+            v1_backend = WindowsKinectV1Backend()
+            v1_count = v1_backend.num_devices()
+            for i in range(v1_count):
+                devices.append(KinectDeviceInfo(
+                    index=global_index,
+                    device_type="v1",
+                    rgb_resolution=(640, 480),
+                    depth_resolution=(640, 480),
+                    intrinsics=DEFAULT_V1_INTRINSICS.copy(),
+                ))
+                global_index += 1
+                logger.info(f"Found Kinect v1 device (index {global_index - 1})")
+        except Exception as e:
+            logger.debug(f"Windows v1 detection failed: {e}")
+
+        # v2 via pykinect2
+        try:
+            v2_backend = WindowsKinect2Backend()
+            v2_count = v2_backend.num_devices()
+            for i in range(v2_count):
                 devices.append(KinectDeviceInfo(
                     index=global_index,
                     device_type="v2",
@@ -622,9 +664,62 @@ def enumerate_kinect_devices_detailed() -> List[KinectDeviceInfo]:
                     intrinsics=DEFAULT_V2_INTRINSICS.copy(),
                 ))
                 global_index += 1
-                logger.info(f"Found Kinect v2 device via USB (index {global_index - 1})")
-        except Exception:
-            pass
+                logger.info(f"Found Kinect v2 device (index {global_index - 1})")
+        except Exception as e:
+            logger.debug(f"Windows v2 detection failed: {e}")
+
+    elif IS_LINUX:
+        # Linux: detect v1 via lsusb, v2 via fn2_shim
+        import subprocess
+        try:
+            result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
+            v1_count = result.stdout.count("045e:02ae")
+            for i in range(v1_count):
+                devices.append(KinectDeviceInfo(
+                    index=global_index,
+                    device_type="v1",
+                    rgb_resolution=(640, 480),
+                    depth_resolution=(640, 480),
+                    intrinsics=DEFAULT_V1_INTRINSICS.copy(),
+                ))
+                global_index += 1
+                logger.info(f"Found Kinect v1 device (index {global_index - 1})")
+        except Exception as e:
+            logger.debug(f"lsusb v1 detection failed: {e}")
+
+        v2_count = 0
+        try:
+            v2_backend = LinuxFreenect2Backend()
+            v2_count = v2_backend.num_devices()
+            for i in range(v2_count):
+                devices.append(KinectDeviceInfo(
+                    index=global_index,
+                    device_type="v2",
+                    rgb_resolution=(1920, 1080),
+                    depth_resolution=(512, 424),
+                    intrinsics=DEFAULT_V2_INTRINSICS.copy(),
+                ))
+                global_index += 1
+                logger.info(f"Found Kinect v2 device (index {global_index - 1})")
+        except Exception as e:
+            logger.debug(f"fn2_shim v2 detection failed: {e}")
+
+        if v2_count == 0:
+            try:
+                result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
+                v2_usb = result.stdout.count("045e:02d8") + result.stdout.count("045e:02c4")
+                for i in range(v2_usb):
+                    devices.append(KinectDeviceInfo(
+                        index=global_index,
+                        device_type="v2",
+                        rgb_resolution=(1920, 1080),
+                        depth_resolution=(512, 424),
+                        intrinsics=DEFAULT_V2_INTRINSICS.copy(),
+                    ))
+                    global_index += 1
+                    logger.info(f"Found Kinect v2 device via USB (index {global_index - 1})")
+            except Exception:
+                pass
 
     if not devices:
         logger.warning("No Kinect devices found — defaulting to 1 synthetic camera")

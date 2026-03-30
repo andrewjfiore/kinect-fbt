@@ -3,6 +3,7 @@
 kinect_server/server.py — FBT server entry point.
 Orchestrates camera capture, multi-camera fusion, and OSC output.
 Supports Kinect v1 (Xbox 360) and v2 (Xbox One), including mixed setups.
+Optional volumetric web server for 3D point cloud monitoring.
 """
 import os as _os
 # Suppress TFLite C++ warnings from MediaPipe's internal inference engine
@@ -19,7 +20,7 @@ import numpy as np
 
 from camera import KinectCamera, CameraFrame, enumerate_kinect_devices
 from calibration import build_default_calibration, load_calibration, run_calibration, run_manual_calibration, run_tpose_calibration
-from fusion import MultiCameraFusion
+from fusion import MultiCameraFusion, FusedJoint
 from osc_output import OSCOutput
 from debug_http import init_debug_server, start_debug_server
 
@@ -58,9 +59,36 @@ def parse_args():
                    help="Path to calibration JSON file")
     p.add_argument("--debug-server", action="store_true",
                    help="Enable HTTP debug server on port 8090")
+    p.add_argument("--web-server", action="store_true",
+                   help="Enable volumetric 3D web server (WebSocket + Three.js) on port 8090")
+    p.add_argument("--web-port", type=int, default=8090,
+                   help="Port for volumetric web server (default 8090)")
+    p.add_argument("--web-stride", type=int, default=4,
+                   help="Point cloud downsample stride (default 4; higher = fewer points, faster)")
+    p.add_argument("--web-max-points", type=int, default=50000,
+                   help="Max points per camera per frame (default 50000)")
     p.add_argument("--dry-run", action="store_true",
                    help="Print OSC messages to stdout instead of sending UDP")
     return p.parse_args()
+
+
+def _build_skeleton_dict(joints: Dict[str, FusedJoint]) -> dict:
+    """Convert fused joints to a compact dict for WebSocket streaming."""
+    out = {}
+    for name, j in joints.items():
+        if j.is_lost or j.confidence < 0.2:
+            continue
+        # Use MediaPipe landmark index as key (matches JOINT_INDICES)
+        from camera import JOINT_INDICES
+        idx = JOINT_INDICES.get(name)
+        if idx is not None:
+            out[str(idx)] = {
+                "x": round(j.x, 4),
+                "y": round(j.y, 4),
+                "z": round(j.z, 4),
+                "confidence": round(j.confidence, 3),
+            }
+    return out
 
 
 def main():
@@ -153,19 +181,37 @@ def main():
         "preview_frames": {},
     }
 
-    # Debug server
-    if args.debug_server:
+    # Debug server (legacy Flask)
+    if args.debug_server and not args.web_server:
         init_debug_server(state)
         start_debug_server(port=8090)
+
+    # Volumetric web server (replaces debug server when enabled)
+    web_server = None
+    if args.web_server:
+        from web_server import VolumetricWebServer
+        from pointcloud import rgbd_to_pointcloud, transform_pointcloud, merge_pointclouds, encode_pointcloud_binary
+        web_server = VolumetricWebServer(host="0.0.0.0", port=args.web_port)
+        web_server.start()
+        logger.info(f"Volumetric web server on http://0.0.0.0:{args.web_port}")
 
     frame_interval = 1.0 / args.fps
     fps_counter = 0
     fps_time = time.monotonic()
 
+    # Alternating capture: each camera gets 15Hz, combined 30Hz
+    # cam_schedule tracks which camera to prioritize for point cloud generation
+    cam_schedule_idx = 0
+    status_broadcast_time = time.monotonic()
+    pc_debug_time = time.monotonic()
+    pc_debug_count = 0
+
     logger.info(f"FBT server running at {args.fps}fps → {args.target_ip}:{args.target_port}")
     logger.info(f"Layout: {layout}")
     if args.dry_run:
         logger.info("DRY RUN: OSC messages printed to stdout")
+    if web_server:
+        logger.info(f"Volumetric streaming: stride={args.web_stride}, max_points={args.web_max_points}")
 
     try:
         while True:
@@ -207,6 +253,94 @@ def main():
                 # Send OSC
                 osc.send(trackers, cameras_active, fusion.joints_tracked_count(), state["fusion_fps"])
 
+                # ── Volumetric streaming ──
+                if web_server and web_server.client_count > 0:
+                    skeleton_dict = _build_skeleton_dict(joints)
+
+                    # Alternating 15Hz: pick which camera sends this tick
+                    scheduled_cam = cam_schedule_idx % num_cameras
+                    cam_schedule_idx += 1
+
+                    per_cam_clouds = []
+
+                    for f in frames_to_fuse:
+                        if f.depth_frame is None or f.rgb_preview is None:
+                            continue
+                        if f.device_info is None:
+                            continue
+
+                        # Use rgb_clean (before skeleton overlay) if available,
+                        # otherwise copy rgb_preview to avoid skeleton circles in point cloud
+                        rgb_for_pc = getattr(f, 'rgb_clean', None)
+                        if rgb_for_pc is None:
+                            rgb_for_pc = f.rgb_preview
+
+                        # Generate point cloud for this camera
+                        positions, colors = rgbd_to_pointcloud(
+                            rgb_for_pc, f.depth_frame, f.device_info,
+                            stride=args.web_stride,
+                            max_points=args.web_max_points,
+                        )
+
+                        if positions.shape[0] == 0:
+                            continue
+
+                        # Transform to world space using calibration
+                        cam_transform = calibration.get(f.camera_id, np.eye(4))
+                        world_positions = transform_pointcloud(positions, cam_transform)
+
+                        # Send per-camera cloud (only for the scheduled camera this tick)
+                        if f.camera_id == scheduled_cam:
+                            frame_data = encode_pointcloud_binary(
+                                world_positions, colors,
+                                skeleton=skeleton_dict,
+                                camera_id=f.camera_id,
+                                timestamp=f.timestamp,
+                            )
+                            web_server.broadcast_pointcloud(frame_data)
+
+                        per_cam_clouds.append((world_positions, colors))
+
+                    # Debug: log point cloud generation rate
+                    pc_debug_count += 1
+                    if now - pc_debug_time >= 5.0:
+                        logger.info(f"[PC] {pc_debug_count} clouds in 5s, {len(per_cam_clouds)} cams, clients={web_server.client_count}")
+                        if per_cam_clouds:
+                            logger.info(f"[PC] cloud0: {per_cam_clouds[0][0].shape[0]} pts")
+                        pc_debug_count = 0
+                        pc_debug_time = now
+
+                    # Send fused cloud (every tick, combining all cameras)
+                    if per_cam_clouds:
+                        fused_pos, fused_col = merge_pointclouds(per_cam_clouds)
+                        # Cap total fused points
+                        if fused_pos.shape[0] > args.web_max_points:
+                            idx = np.random.choice(fused_pos.shape[0], args.web_max_points, replace=False)
+                            fused_pos = fused_pos[idx]
+                            fused_col = fused_col[idx]
+                        fused_data = encode_pointcloud_binary(
+                            fused_pos, fused_col,
+                            skeleton=skeleton_dict,
+                            camera_id=-1,
+                            timestamp=time.monotonic(),
+                        )
+                        web_server.broadcast_pointcloud(fused_data)
+
+                    # Periodic status broadcast (1Hz)
+                    if now - status_broadcast_time >= 1.0:
+                        web_server.broadcast_status({
+                            "cameras_active": cameras_active,
+                            "joints_tracked": fusion.joints_tracked_count(),
+                            "fusion_fps": round(state["fusion_fps"], 1),
+                            "osc_target": state["osc_target"],
+                        })
+                        web_server.update_status(
+                            cameras_active=cameras_active,
+                            joints_tracked=fusion.joints_tracked_count(),
+                            fusion_fps=round(state["fusion_fps"], 1),
+                        )
+                        status_broadcast_time = now
+
             # FPS tracking
             fps_counter += 1
             now = time.monotonic()
@@ -226,6 +360,8 @@ def main():
     finally:
         for cam in cameras:
             cam.stop()
+        if web_server:
+            web_server.stop()
 
 
 if __name__ == "__main__":

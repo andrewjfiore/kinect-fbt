@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kinect FBT — Volumetric Monitor</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+}
+#header {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px;
+    background: rgba(10, 10, 15, 0.9);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid #1a1a2e;
+}
+#header h1 { font-size: 14px; font-weight: 600; color: #7c8aff; }
+.status-bar {
+    display: flex; gap: 16px; font-size: 12px; color: #888;
+}
+.status-bar .value { color: #aaa; font-weight: 600; }
+.status-bar .connected { color: #4caf50; }
+.status-bar .disconnected { color: #f44336; }
+
+#viewport-container {
+    display: flex;
+    height: 100vh;
+    padding-top: 40px;
+}
+.viewport {
+    flex: 1;
+    position: relative;
+    border-right: 1px solid #1a1a2e;
+}
+.viewport:last-child { border-right: none; }
+.viewport-label {
+    position: absolute; top: 8px; left: 12px; z-index: 10;
+    font-size: 11px; font-weight: 600; color: #666;
+    text-transform: uppercase; letter-spacing: 1px;
+    pointer-events: none;
+}
+.viewport-stats {
+    position: absolute; bottom: 8px; left: 12px; z-index: 10;
+    font-size: 10px; color: #555;
+    pointer-events: none;
+}
+canvas { display: block; }
+
+#controls {
+    position: fixed; bottom: 16px; right: 16px; z-index: 100;
+    display: flex; flex-direction: column; gap: 6px;
+}
+#controls button {
+    background: #1a1a2e; border: 1px solid #2a2a4e; color: #aaa;
+    padding: 6px 12px; border-radius: 4px; cursor: pointer;
+    font-size: 11px; transition: all 0.2s;
+}
+#controls button:hover { background: #2a2a4e; color: #fff; }
+#controls button.active { background: #3a3a6e; color: #7c8aff; border-color: #7c8aff; }
+
+#point-size-control {
+    position: fixed; bottom: 16px; left: 16px; z-index: 100;
+    display: flex; align-items: center; gap: 8px; font-size: 11px; color: #666;
+}
+#point-size-control input[type=range] {
+    width: 100px; accent-color: #7c8aff;
+}
+</style>
+</head>
+<body>
+
+<div id="header">
+    <h1>KINECT FBT VOLUMETRIC MONITOR</h1>
+    <div class="status-bar">
+        <span>WS: <span id="ws-status" class="disconnected">disconnected</span></span>
+        <span>Cameras: <span id="cam-count" class="value">0</span></span>
+        <span>Joints: <span id="joint-count" class="value">0</span></span>
+        <span>Stream: <span id="stream-fps" class="value">0</span> Hz</span>
+        <span>Points: <span id="point-count" class="value">0</span></span>
+        <span>Render: <span id="render-fps" class="value">0</span> FPS</span>
+    </div>
+</div>
+
+<div id="viewport-container">
+    <div class="viewport" id="vp-cam0">
+        <div class="viewport-label">Camera 0 (v1)</div>
+        <div class="viewport-stats" id="stats-cam0">--</div>
+    </div>
+    <div class="viewport" id="vp-fused">
+        <div class="viewport-label">Fused View</div>
+        <div class="viewport-stats" id="stats-fused">--</div>
+    </div>
+    <div class="viewport" id="vp-cam1">
+        <div class="viewport-label">Camera 1 (v2)</div>
+        <div class="viewport-stats" id="stats-cam1">--</div>
+    </div>
+</div>
+
+<div id="controls">
+    <button id="btn-reset" title="Reset all camera views">Reset Views</button>
+    <button id="btn-skeleton" class="active" title="Toggle skeleton overlay">Skeleton</button>
+    <button id="btn-grid" class="active" title="Toggle ground grid">Grid</button>
+    <button id="btn-axes" title="Toggle axis helper">Axes</button>
+</div>
+
+<div id="point-size-control">
+    <label for="pt-size">Point Size:</label>
+    <input type="range" id="pt-size" min="0.002" max="0.05" step="0.002" value="0.008">
+    <span id="pt-size-val">0.008</span>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+// ============================================================
+// Kinect FBT Volumetric Monitor
+// ============================================================
+
+const MAX_POINTS = 200000; // Pre-allocate for this many points per viewport
+
+const SKELETON_CONNECTIONS = [
+    [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
+    [11, 23], [12, 24], [23, 24],
+    [23, 25], [25, 27], [24, 26], [26, 28],
+    [27, 29], [29, 31], [28, 30], [30, 32],
+];
+
+let ws = null;
+let showSkeleton = true;
+let showGrid = true;
+let showAxes = false;
+let pointSize = 0.008;
+
+const views = {};
+const viewIds = ['cam0', 'fused', 'cam1'];
+let threeReady = false;
+
+// FPS tracking
+let streamFrameCount = 0, streamFpsTime = performance.now(), streamFps = 0;
+let renderFrameCount = 0, renderFpsTime = performance.now(), renderFps = 0;
+
+// ---- Circle sprite for round points ----
+function makeCircleTexture() {
+    const size = 64;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.beginPath();
+    ctx.arc(size/2, size/2, size/2 - 1, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    const tex = new THREE.CanvasTexture(c);
+    tex.needsUpdate = true;
+    return tex;
+}
+
+// ---- Create viewport ----
+function createViewport(containerId) {
+    const container = document.getElementById(containerId);
+    const rect = container.getBoundingClientRect();
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0a12);
+
+    // Camera looking at the scene from front-ish angle
+    const camera = new THREE.PerspectiveCamera(60, rect.width / rect.height, 0.05, 100);
+    camera.position.set(0, 1.5, -4.0);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer.setSize(rect.width, rect.height);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(renderer.domElement);
+
+    // Grid on Y=0
+    const grid = new THREE.GridHelper(10, 20, 0x222244, 0x161630);
+    scene.add(grid);
+
+    const axes = new THREE.AxesHelper(0.5);
+    axes.visible = false;
+    scene.add(axes);
+
+    // Pre-allocate point cloud buffers (avoids GPU thrashing)
+    const pcGeometry = new THREE.BufferGeometry();
+    const posBuffer = new Float32Array(MAX_POINTS * 3);
+    const colBuffer = new Float32Array(MAX_POINTS * 3);
+    const posAttr = new THREE.BufferAttribute(posBuffer, 3);
+    const colAttr = new THREE.BufferAttribute(colBuffer, 3);
+    posAttr.setUsage(THREE.DynamicDrawUsage);
+    colAttr.setUsage(THREE.DynamicDrawUsage);
+    pcGeometry.setAttribute('position', posAttr);
+    pcGeometry.setAttribute('color', colAttr);
+    pcGeometry.setDrawRange(0, 0); // draw nothing initially
+
+    const circleMap = makeCircleTexture();
+    const pcMaterial = new THREE.PointsMaterial({
+        size: pointSize,
+        vertexColors: true,
+        sizeAttenuation: true,
+        map: circleMap,
+        alphaTest: 0.3,
+        transparent: true,
+        opacity: 0.6,
+        depthWrite: true,
+    });
+    const pointCloud = new THREE.Points(pcGeometry, pcMaterial);
+    scene.add(pointCloud);
+
+    // Skeleton: use cylinder meshes for bones (LineBasicMaterial.linewidth is ignored on most GPUs)
+    const boneGroup = new THREE.Group();
+    scene.add(boneGroup);
+    const boneMeshes = [];
+    const boneGeo = new THREE.CylinderGeometry(0.012, 0.012, 1, 6);
+    boneGeo.translate(0, 0.5, 0); // pivot at bottom
+    boneGeo.rotateX(Math.PI / 2); // align along Z
+    for (let i = 0; i < SKELETON_CONNECTIONS.length; i++) {
+        const mat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
+        const mesh = new THREE.Mesh(boneGeo, mat);
+        mesh.visible = false;
+        boneGroup.add(mesh);
+        boneMeshes.push(mesh);
+    }
+
+    // Joint spheres — larger for FBT visibility
+    const jointGroup = new THREE.Group();
+    scene.add(jointGroup);
+
+    // Tracker indicators (hip, feet, knees) — even larger, distinct color
+    const trackerGroup = new THREE.Group();
+    scene.add(trackerGroup);
+    const TRACKER_JOINTS = { '23': 'L_HIP', '24': 'R_HIP', '27': 'L_ANKLE', '28': 'R_ANKLE', '25': 'L_KNEE', '26': 'R_KNEE' };
+
+    const orbit = createOrbitControl(camera, renderer.domElement, containerId === 'vp-fused');
+
+    return {
+        container, scene, camera, renderer, orbit,
+        grid, axes, pointCloud, pcGeometry, pcMaterial,
+        posAttr, colAttr,
+        boneGroup, boneMeshes, jointGroup, trackerGroup,
+        pointCount: 0,
+    };
+}
+
+// ---- Orbit control ----
+function createOrbitControl(camera, el, isFused) {
+    const s = {
+        dragging: false, rightDrag: false, px: 0, py: 0,
+        theta: Math.PI,
+        phi: Math.PI * 0.35,
+        radius: isFused ? 4.0 : 3.0,
+        target: new THREE.Vector3(0, 0, 0),
+    };
+
+    function update() {
+        const x = s.radius * Math.sin(s.phi) * Math.sin(s.theta);
+        const y = s.radius * Math.cos(s.phi);
+        const z = s.radius * Math.sin(s.phi) * Math.cos(s.theta);
+        camera.position.set(s.target.x + x, s.target.y + y, s.target.z + z);
+        camera.lookAt(s.target);
+    }
+
+    el.addEventListener('mousedown', e => {
+        s.dragging = true; s.rightDrag = e.button === 2;
+        s.px = e.clientX; s.py = e.clientY;
+    });
+    el.addEventListener('mousemove', e => {
+        if (!s.dragging) return;
+        const dx = e.clientX - s.px, dy = e.clientY - s.py;
+        s.px = e.clientX; s.py = e.clientY;
+        if (s.rightDrag) {
+            const ps = 0.003 * s.radius;
+            const right = new THREE.Vector3();
+            camera.getWorldDirection(right).cross(camera.up).normalize();
+            s.target.add(right.multiplyScalar(-dx * ps));
+            s.target.y += dy * ps;
+        } else {
+            s.theta -= dx * 0.005;
+            s.phi = Math.max(0.1, Math.min(Math.PI - 0.1, s.phi - dy * 0.005));
+        }
+        update();
+    });
+    el.addEventListener('mouseup', () => s.dragging = false);
+    el.addEventListener('mouseleave', () => s.dragging = false);
+    el.addEventListener('wheel', e => {
+        s.radius = Math.max(0.5, Math.min(20, s.radius * (1 + e.deltaY * 0.001)));
+        update(); e.preventDefault();
+    }, { passive: false });
+    el.addEventListener('contextmenu', e => e.preventDefault());
+
+    update();
+    return { update, reset() {
+        s.theta = Math.PI; s.phi = Math.PI * 0.35;
+        s.radius = isFused ? 4.0 : 3.0;
+        s.target.set(0, 0.8, 2.0);
+        update();
+    }};
+}
+
+// ---- Init viewports ----
+try {
+    viewIds.forEach(id => { views[id] = createViewport('vp-' + id); });
+    threeReady = true;
+} catch (e) {
+    console.error('Three.js init failed:', e);
+    document.getElementById('ws-status').textContent = 'THREE.js error: ' + e.message;
+}
+
+// ---- Resize ----
+window.addEventListener('resize', () => {
+    if (!threeReady) return;
+    viewIds.forEach(id => {
+        const v = views[id];
+        const r = v.container.getBoundingClientRect();
+        v.camera.aspect = r.width / r.height;
+        v.camera.updateProjectionMatrix();
+        v.renderer.setSize(r.width, r.height);
+    });
+});
+
+// ---- WebSocket ----
+function connectWebSocket() {
+    const url = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+        document.getElementById('ws-status').textContent = 'connected';
+        document.getElementById('ws-status').className = 'connected';
+    };
+    ws.onclose = () => {
+        document.getElementById('ws-status').textContent = 'disconnected';
+        document.getElementById('ws-status').className = 'disconnected';
+        setTimeout(connectWebSocket, 2000);
+    };
+    ws.onerror = () => ws.close();
+    let _msgCount = 0, _lastMsgLog = 0;
+    ws.onmessage = (ev) => {
+        if (ev.data instanceof ArrayBuffer) {
+            _msgCount++;
+            if (Date.now() - _lastMsgLog > 3000) {
+                console.log(`WS: ${_msgCount} frames, latest=${ev.data.byteLength}B`);
+                _msgCount = 0; _lastMsgLog = Date.now();
+            }
+            handleBinaryFrame(ev.data);
+        } else {
+            try {
+                const msg = JSON.parse(ev.data);
+                if (msg.type === 'status') {
+                    document.getElementById('cam-count').textContent = msg.data.cameras_active || 0;
+                    document.getElementById('joint-count').textContent = msg.data.joints_tracked || 0;
+                }
+            } catch(e) {}
+        }
+    };
+}
+connectWebSocket();
+
+// ---- Binary frame handler ----
+function handleBinaryFrame(buf) {
+    if (!threeReady) return;
+    const dv = new DataView(buf);
+    if (dv.getUint32(0, true) !== 0x50434C44) return;
+
+    const camId = dv.getInt32(4, true);
+    const numPts = dv.getUint32(16, true);
+    let off = 20;
+
+    const posF32 = new Float32Array(buf, off, numPts * 3); off += numPts * 12;
+    const colU8 = new Uint8Array(buf, off, numPts * 3); off += numPts * 3;
+
+    let skeleton = null;
+    if (off + 4 <= buf.byteLength) {
+        const sLen = dv.getUint32(off, true); off += 4;
+        if (sLen > 0 && off + sLen <= buf.byteLength) {
+            try { skeleton = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, off, sLen))); } catch(e) {}
+        }
+    }
+
+    const viewId = camId === -1 ? 'fused' : camId === 0 ? 'cam0' : 'cam1';
+    updatePointCloud(viewId, posF32, colU8, numPts);
+    if (skeleton) updateSkeleton(viewId, skeleton);
+
+    // Stream FPS
+    streamFrameCount++;
+    const now = performance.now();
+    if (now - streamFpsTime >= 1000) {
+        streamFps = streamFrameCount / ((now - streamFpsTime) / 1000);
+        streamFrameCount = 0; streamFpsTime = now;
+        document.getElementById('stream-fps').textContent = streamFps.toFixed(1);
+    }
+}
+
+// ---- Update point cloud (in-place buffer update, no allocation) ----
+function updatePointCloud(viewId, posF32, colU8, n) {
+    const v = views[viewId];
+    if (!v) return;
+
+    const count = Math.min(n, MAX_POINTS);
+
+    // Copy positions into pre-allocated buffer
+    v.posAttr.array.set(posF32.subarray(0, count * 3));
+    v.posAttr.needsUpdate = true;
+
+    // Convert uint8 colors to float in-place
+    const ca = v.colAttr.array;
+    for (let i = 0; i < count * 3; i++) ca[i] = colU8[i] / 255.0;
+    v.colAttr.needsUpdate = true;
+
+    // Only draw the points we have
+    v.pcGeometry.setDrawRange(0, count);
+    v.pointCount = count;
+
+    const el = document.getElementById('stats-' + viewId);
+    if (el) el.textContent = count.toLocaleString() + ' pts';
+
+    let total = 0;
+    viewIds.forEach(id => total += views[id].pointCount);
+    document.getElementById('point-count').textContent = total.toLocaleString();
+}
+
+// ---- Update skeleton with cylinder bones + tracker highlights ----
+const _tmpA = new THREE.Vector3(), _tmpB = new THREE.Vector3(), _tmpDir = new THREE.Vector3();
+const TRACKER_JOINTS = { '23': true, '24': true, '27': true, '28': true, '25': true, '26': true };
+
+function updateSkeleton(viewId, skel) {
+    const v = views[viewId];
+    if (!v) return;
+
+    const show = showSkeleton;
+    v.boneGroup.visible = show;
+    v.jointGroup.visible = show;
+    v.trackerGroup.visible = show;
+    if (!show) return;
+
+    // Update cylinder bones
+    for (let i = 0; i < SKELETON_CONNECTIONS.length; i++) {
+        const [a, b] = SKELETON_CONNECTIONS[i];
+        const ja = skel[String(a)], jb = skel[String(b)];
+        const mesh = v.boneMeshes[i];
+        if (ja && jb) {
+            _tmpA.set(ja.x, ja.y, ja.z);
+            _tmpB.set(jb.x, jb.y, jb.z);
+            const len = _tmpA.distanceTo(_tmpB);
+            if (len < 0.001) { mesh.visible = false; continue; }
+            mesh.visible = true;
+            mesh.position.copy(_tmpA);
+            _tmpDir.subVectors(_tmpB, _tmpA).normalize();
+            mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), _tmpDir);
+            mesh.scale.set(1, 1, len);
+            // Color by avg confidence
+            const conf = ((ja.confidence || 0) + (jb.confidence || 0)) / 2;
+            mesh.material.color.setHex(conf > 0.7 ? 0x00ff88 : conf > 0.4 ? 0xffaa00 : 0xff4444);
+        } else {
+            mesh.visible = false;
+        }
+    }
+
+    // Update joint spheres (regular joints = small, tracker joints = large)
+    const jg = v.jointGroup;
+    const tg = v.trackerGroup;
+    const ids = Object.keys(skel);
+
+    // Regular joints
+    while (jg.children.length < ids.length) {
+        jg.add(new THREE.Mesh(
+            new THREE.SphereGeometry(0.025, 8, 6),
+            new THREE.MeshBasicMaterial({ color: 0x00ff88 })
+        ));
+    }
+    // Tracker highlight rings
+    while (tg.children.length < 6) {
+        tg.add(new THREE.Mesh(
+            new THREE.TorusGeometry(0.06, 0.015, 8, 16),
+            new THREE.MeshBasicMaterial({ color: 0x4488ff })
+        ));
+    }
+
+    let trackerIdx = 0;
+    for (let j = 0; j < jg.children.length; j++) {
+        if (j < ids.length) {
+            const jid = ids[j];
+            const d = skel[jid];
+            const sp = jg.children[j];
+            sp.visible = true;
+            sp.position.set(d.x, d.y, d.z);
+            const c = d.confidence || 0;
+            sp.material.color.setHex(c > 0.7 ? 0x00ff88 : c > 0.4 ? 0xffaa00 : 0xff4444);
+
+            // Tracker joints get a highlight ring
+            if (TRACKER_JOINTS[jid] && trackerIdx < tg.children.length) {
+                const ring = tg.children[trackerIdx++];
+                ring.visible = true;
+                ring.position.set(d.x, d.y, d.z);
+                ring.material.color.setHex(c > 0.5 ? 0x4488ff : 0xff6622);
+            }
+        } else {
+            jg.children[j].visible = false;
+        }
+    }
+    for (let t = trackerIdx; t < tg.children.length; t++) tg.children[t].visible = false;
+}
+
+// ---- Render loop ----
+function animate() {
+    requestAnimationFrame(animate);
+    if (!threeReady) return;
+
+    viewIds.forEach(id => {
+        const v = views[id];
+        v.grid.visible = showGrid;
+        v.axes.visible = showAxes;
+        v.pcMaterial.size = pointSize;
+        v.renderer.render(v.scene, v.camera);
+    });
+
+    renderFrameCount++;
+    const now = performance.now();
+    if (now - renderFpsTime >= 1000) {
+        renderFps = renderFrameCount / ((now - renderFpsTime) / 1000);
+        renderFrameCount = 0; renderFpsTime = now;
+        document.getElementById('render-fps').textContent = renderFps.toFixed(0);
+    }
+}
+animate();
+
+// ---- UI ----
+document.getElementById('btn-reset').onclick = () => {
+    if (threeReady) viewIds.forEach(id => views[id].orbit.reset());
+};
+document.getElementById('btn-skeleton').onclick = function() {
+    showSkeleton = !showSkeleton; this.classList.toggle('active', showSkeleton);
+};
+document.getElementById('btn-grid').onclick = function() {
+    showGrid = !showGrid; this.classList.toggle('active', showGrid);
+};
+document.getElementById('btn-axes').onclick = function() {
+    showAxes = !showAxes; this.classList.toggle('active', showAxes);
+};
+document.getElementById('pt-size').oninput = function() {
+    pointSize = parseFloat(this.value);
+    document.getElementById('pt-size-val').textContent = pointSize.toFixed(3);
+};
+</script>
+</body>
+</html>

@@ -11,3 +11,7 @@ build/
 quest_app/.gradle/
 quest_app/build/
 quest_app/app/build/
+venv/
+venv310/
+kinect_server/venv/
+*.png

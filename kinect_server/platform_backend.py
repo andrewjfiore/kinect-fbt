@@ -481,6 +481,7 @@ class LinuxFreenectV1Backend(KinectBackend):
 class WindowsKinect2Backend(KinectBackend):
     """
     Uses pykinect2 which wraps the official Kinect for Windows SDK v2.
+    Provides both RGB-D frames and native 25-joint body tracking.
     Install: pip install pykinect2
     Requires: Kinect for Windows SDK 2.0 from Microsoft
     Download SDK: https://www.microsoft.com/en-us/download/details.aspx?id=44561
@@ -492,6 +493,7 @@ class WindowsKinect2Backend(KinectBackend):
         self._depth_w = 512
         self._depth_h = 424
         self._coord_mapper = None
+        self._last_bodies = None  # cached body frame data
 
     def get_device_info(self) -> DeviceInfo:
         return get_v2_device_info()
@@ -520,12 +522,14 @@ class WindowsKinect2Backend(KinectBackend):
             return False
         try:
             from pykinect2 import PyKinectRuntime, PyKinectV2
+            # Request Color + Depth + Body streams
             self._kinect = PyKinectRuntime.PyKinectRuntime(
-                PyKinectV2.FrameSourceTypes_Color | PyKinectV2.FrameSourceTypes_Depth
+                PyKinectV2.FrameSourceTypes_Color |
+                PyKinectV2.FrameSourceTypes_Depth |
+                PyKinectV2.FrameSourceTypes_Body
             )
-            # pykinect2 stores the coordinate mapper as _mapper (not CoordinateMapper)
             self._coord_mapper = self._kinect._mapper
-            logger.info("[Windows] Kinect v2 opened via Kinect for Windows SDK")
+            logger.info("[Windows] Kinect v2 opened with Body tracking via Kinect for Windows SDK")
             return True
         except (ImportError, AssertionError) as e:
             logger.error(
@@ -562,9 +566,55 @@ class WindowsKinect2Backend(KinectBackend):
             # This is the Windows equivalent of libfreenect2's registration
             depth_color = self._map_depth_to_color(depth_512)
 
+            # Also grab body frame if available
+            self._last_bodies = None
+            if self._kinect.has_new_body_frame():
+                self._last_bodies = self._kinect.get_last_body_frame()
+
             return rgb, depth_color
         except Exception as e:
             logger.error(f"[Windows] Frame capture error: {e}")
+            return None
+
+    def get_body_joints(self) -> Optional[list]:
+        """
+        Get tracked body joints from the Kinect v2 SDK.
+        Returns list of dicts for the first tracked body:
+            [{"joint_type": int, "x": float, "y": float, "z": float,
+              "tracking_state": int, "qx": float, "qy": float, "qz": float, "qw": float}, ...]
+        Positions are in meters, camera-space (x=right, y=up, z=toward-sensor).
+        Returns None if no body tracked.
+        """
+        if self._kinect is None or self._last_bodies is None:
+            return None
+        try:
+            from pykinect2 import PyKinectV2
+            bodies = self._last_bodies
+            for i in range(self._kinect.max_body_count):
+                body = bodies.bodies[i]
+                if not body.is_tracked:
+                    continue
+                joints = body.joints
+                orientations = body.joint_orientations
+                result = []
+                for j in range(PyKinectV2.JointType_Count):
+                    jt = joints[j]
+                    ori = orientations[j]
+                    result.append({
+                        "joint_type": j,
+                        "x": jt.Position.x,
+                        "y": jt.Position.y,
+                        "z": jt.Position.z,
+                        "tracking_state": jt.TrackingState,
+                        "qx": ori.Orientation.x,
+                        "qy": ori.Orientation.y,
+                        "qz": ori.Orientation.z,
+                        "qw": ori.Orientation.w,
+                    })
+                return result
+            return None
+        except Exception as e:
+            logger.debug(f"[Windows] Body frame error: {e}")
             return None
 
     def _map_depth_to_color(self, depth_512: np.ndarray) -> np.ndarray:
@@ -630,8 +680,394 @@ class WindowsKinect2Backend(KinectBackend):
 
 
 # ──────────────────────────────────────────────────────────────
-# Linux backend: freenect (Kinect v1 / Xbox 360 Kinect)
-# USB ID: 045e:02ae, RGB 640x480, Depth 640x480 uint16 mm
+# Windows backend: Kinect for Windows SDK v1.8 (Kinect v1 / Xbox 360)
+# Uses ctypes to call Kinect10.dll COM interface directly.
+# Requires: Kinect for Windows SDK v1.8 installed
+# ──────────────────────────────────────────────────────────────
+class WindowsKinectV1Backend(KinectBackend):
+    """
+    Kinect v1 (Xbox 360) backend for Windows using Kinect10.dll via ctypes.
+    Drives the INuiSensor COM interface through vtable calls.
+
+    Specs: RGB 640x480 @ 30fps, Depth 640x480 uint16 (mm with player index).
+    """
+
+    # NUI constants
+    _NUI_INITIALIZE_FLAG_USES_COLOR = 0x00000002
+    _NUI_INITIALIZE_FLAG_USES_DEPTH = 0x00000020
+    _NUI_INITIALIZE_FLAG_USES_DEPTH_AND_PLAYER_INDEX = 0x00000001
+    _NUI_INITIALIZE_FLAG_USES_SKELETON = 0x00000008
+    _NUI_IMAGE_TYPE_DEPTH_AND_PLAYER_INDEX = 0  # includes player segmentation
+    _NUI_IMAGE_TYPE_COLOR = 1
+    _NUI_IMAGE_TYPE_DEPTH = 4
+    _NUI_IMAGE_RESOLUTION_640x480 = 2
+
+    # NUI Skeleton constants
+    _NUI_SKELETON_COUNT = 6
+    _NUI_SKELETON_POSITION_COUNT = 20
+    _NUI_SKELETON_TRACKED = 2
+    _NUI_SKELETON_POSITION_TRACKED = 2
+    _NUI_SKELETON_POSITION_INFERRED = 1
+
+    def __init__(self):
+        self._kinect_dll = None
+        self._sensor_ptr = None  # pointer to INuiSensor COM interface
+        self._color_stream = None
+        self._depth_stream = None
+        self._device_idx = None
+        self._last_skeleton_joints = None  # cached skeleton data
+
+    def get_device_info(self) -> DeviceInfo:
+        return get_v1_device_info()
+
+    def _load_dll(self):
+        if self._kinect_dll is not None:
+            return True
+        try:
+            import ctypes
+            self._kinect_dll = ctypes.windll.Kinect10
+            return True
+        except Exception as e:
+            logger.debug(f"[WinV1] Kinect10.dll not available: {e}")
+            self._kinect_dll = None
+            return False
+
+    def num_devices(self) -> int:
+        if not IS_WINDOWS:
+            return 0
+        if not self._load_dll():
+            return 0
+        try:
+            import ctypes
+            count = ctypes.c_int(0)
+            hr = self._kinect_dll.NuiGetSensorCount(ctypes.byref(count))
+            if hr != 0:
+                return 0
+            return count.value
+        except Exception as e:
+            logger.debug(f"[WinV1] NuiGetSensorCount failed: {e}")
+            return 0
+
+    def open(self, device_index: int) -> bool:
+        if not IS_WINDOWS:
+            return False
+        if not self._load_dll():
+            return False
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            self._device_idx = device_index
+
+            # NuiCreateSensorByIndex(int index, INuiSensor** ppSensor)
+            sensor_ptr = ctypes.c_void_p(0)
+            hr = self._kinect_dll.NuiCreateSensorByIndex(
+                ctypes.c_int(device_index), ctypes.byref(sensor_ptr)
+            )
+            if hr != 0 or not sensor_ptr.value:
+                logger.error(f"[WinV1] NuiCreateSensorByIndex({device_index}) failed: HRESULT={hr:#010x}")
+                return False
+            self._sensor_ptr = sensor_ptr
+
+            # Get vtable pointer: sensor_ptr -> vtbl -> function pointers
+            vtbl_ptr = ctypes.cast(sensor_ptr, ctypes.POINTER(ctypes.c_void_p))[0]
+            self._vtbl = ctypes.cast(vtbl_ptr, ctypes.POINTER(ctypes.c_void_p * 30))[0]
+
+            # vtable layout (INuiSensor):
+            #  [0] QueryInterface  [1] AddRef  [2] Release
+            #  [3] NuiInitialize   [4] NuiShutdown   [5] NuiSetFrameEndEvent
+            #  [6] NuiImageStreamOpen
+            #  [7] NuiImageStreamSetImageFrameFlags
+            #  [8] NuiImageStreamGetImageFrameFlags
+            #  [9] NuiImageStreamGetNextFrame
+            #  [10] NuiImageStreamReleaseFrame
+
+            # Call NuiInitialize(flags) — use DEPTH_AND_PLAYER_INDEX + SKELETON for native body tracking
+            NuiInitialize = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_ulong)(self._vtbl[3])
+            flags = (self._NUI_INITIALIZE_FLAG_USES_COLOR |
+                     self._NUI_INITIALIZE_FLAG_USES_DEPTH_AND_PLAYER_INDEX |
+                     self._NUI_INITIALIZE_FLAG_USES_SKELETON)
+            hr = NuiInitialize(sensor_ptr, flags)
+            if hr != 0:
+                logger.error(f"[WinV1] NuiInitialize failed: HRESULT={hr:#010x}")
+                return False
+
+            # Open color stream: NuiImageStreamOpen(eImageType, eResolution, dwImageFrameFlags, dwFrameLimit, hNextFrameEvent, phStreamHandle)
+            NuiImageStreamOpen = ctypes.WINFUNCTYPE(
+                ctypes.c_long, ctypes.c_void_p,
+                ctypes.c_int, ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)
+            )(self._vtbl[6])
+
+            color_handle = ctypes.c_void_p(0)
+            hr = NuiImageStreamOpen(
+                sensor_ptr,
+                self._NUI_IMAGE_TYPE_COLOR,
+                self._NUI_IMAGE_RESOLUTION_640x480,
+                0,  # flags
+                2,  # frame limit
+                None,  # no event
+                ctypes.byref(color_handle)
+            )
+            if hr != 0:
+                logger.error(f"[WinV1] Color stream open failed: HRESULT={hr:#010x}")
+                return False
+            self._color_stream = color_handle
+
+            depth_handle = ctypes.c_void_p(0)
+            hr = NuiImageStreamOpen(
+                sensor_ptr,
+                self._NUI_IMAGE_TYPE_DEPTH_AND_PLAYER_INDEX,
+                self._NUI_IMAGE_RESOLUTION_640x480,
+                0,  # flags
+                2,  # frame limit
+                None,  # no event
+                ctypes.byref(depth_handle)
+            )
+            if hr != 0:
+                logger.error(f"[WinV1] Depth stream open failed: HRESULT={hr:#010x}")
+                return False
+            self._depth_stream = depth_handle
+
+            # Enable skeleton tracking
+            # vtable[16] = NuiSkeletonTrackingEnable(HANDLE hNextFrameEvent, DWORD dwFlags)
+            NuiSkeletonTrackingEnable = ctypes.WINFUNCTYPE(
+                ctypes.c_long, ctypes.c_void_p,
+                ctypes.c_void_p, ctypes.c_ulong
+            )(self._vtbl[16])
+            hr = NuiSkeletonTrackingEnable(sensor_ptr, None, 0)
+            if hr != 0:
+                logger.warning(f"[WinV1] Skeleton tracking enable failed: HRESULT={hr:#010x} (tracking will use MediaPipe fallback)")
+            else:
+                logger.info(f"[WinV1] Native skeleton tracking enabled")
+
+            logger.info(f"[WinV1] Kinect v1 device {device_index} opened (Kinect10.dll)")
+            return True
+
+        except Exception as e:
+            logger.error(f"[WinV1] Failed to open device {device_index}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def get_frames(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        if self._sensor_ptr is None:
+            return None
+        try:
+            import ctypes
+
+            rgb = self._grab_frame(self._color_stream, is_color=True)
+            depth = self._grab_frame(self._depth_stream, is_color=False)
+            if rgb is None or depth is None:
+                return None
+
+            # Also grab skeleton frame
+            self._last_skeleton_joints = self._grab_skeleton()
+
+            return rgb, depth
+
+        except Exception as e:
+            logger.error(f"[WinV1] Frame capture error: {e}")
+            return None
+
+    def _grab_skeleton(self) -> Optional[list]:
+        """Grab skeleton from NuiSkeletonGetNextFrame via vtable call."""
+        import ctypes
+
+        # NUI_SKELETON_FRAME is large (~2700 bytes). Use a buffer.
+        # Layout: 8(timestamp) + 4(framenum) + 4(flags) + 16(floor) + 16(gravity) + 6*NUI_SKELETON_DATA
+        # NUI_SKELETON_DATA = 4+4+4+4+16+320+80+4 = 436 bytes
+        # Total = 48 + 6*436 = 48 + 2616 = 2664 bytes
+        # Use 2720 to be safe with alignment
+        skel_buf = (ctypes.c_byte * 2720)()
+
+        # vtable[19] = NuiSkeletonGetNextFrame(DWORD dwMillisecondsToWait, NUI_SKELETON_FRAME* pFrame)
+        NuiSkeletonGetNextFrame = ctypes.WINFUNCTYPE(
+            ctypes.c_long, ctypes.c_void_p,
+            ctypes.c_ulong, ctypes.c_void_p
+        )(self._vtbl[19])
+
+        hr = NuiSkeletonGetNextFrame(self._sensor_ptr, ctypes.c_ulong(0), ctypes.byref(skel_buf))
+        if hr != 0:
+            return None
+
+        # Parse skeleton data from buffer
+        # Skip header: 8(ts) + 4(framenum) + 4(flags) + 16(floor) + 16(gravity) = 48 bytes
+        header_size = 48
+        skel_data_size = 436
+
+        for i in range(self._NUI_SKELETON_COUNT):
+            offset = header_size + i * skel_data_size
+            tracking_state = ctypes.c_int.from_buffer(skel_buf, offset).value
+            if tracking_state != self._NUI_SKELETON_TRACKED:
+                continue
+
+            # Found a tracked skeleton — extract 20 joint positions
+            # Skip: eTrackingState(4) + dwTrackingID(4) + dwEnrollmentIndex(4) + dwUserIndex(4) + Position(16) = 32
+            joints_offset = offset + 32
+            states_offset = joints_offset + 20 * 16  # after 20 Vector4s
+
+            joints = []
+            for j in range(self._NUI_SKELETON_POSITION_COUNT):
+                # Vector4: x, y, z, w (4 floats)
+                joff = joints_offset + j * 16
+                x = ctypes.c_float.from_buffer(skel_buf, joff).value
+                y = ctypes.c_float.from_buffer(skel_buf, joff + 4).value
+                z = ctypes.c_float.from_buffer(skel_buf, joff + 8).value
+
+                soff = states_offset + j * 4
+                state = ctypes.c_int.from_buffer(skel_buf, soff).value
+
+                joints.append({
+                    "joint_type": j,
+                    "x": x,
+                    "y": y,
+                    "z": z,
+                    "tracking_state": state,
+                    # v1 doesn't provide quaternion orientations inline;
+                    # would need NuiSkeletonCalculateBoneOrientations (separate call)
+                    "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0,
+                })
+            return joints
+
+        return None
+
+    def get_body_joints(self) -> Optional[list]:
+        """Return cached skeleton joints from last get_frames() call."""
+        return self._last_skeleton_joints
+
+    def _grab_frame(self, stream_handle, is_color: bool):
+        """Grab a single frame from a stream via COM vtable calls."""
+        import ctypes
+
+        # NUI_IMAGE_FRAME struct (must match C layout on 64-bit):
+        # LARGE_INTEGER liTimeStamp (8 bytes)
+        # DWORD dwFrameNumber (4 bytes)
+        # int eImageType (4 bytes)
+        # int eResolution (4 bytes)
+        # void* pFrameTexture (8 bytes on 64-bit)
+        # DWORD dwFrameFlags (4 bytes)
+        # NUI_IMAGE_VIEW_AREA ViewArea: int eDigitalZoom(4), LONG lCenterX(4), LONG lCenterY(4)
+        # Total ~44 bytes, but alignment may add padding
+        # Use a 64-byte buffer to be safe
+        frame_buf = (ctypes.c_byte * 64)()
+
+        # NuiImageStreamGetNextFrame(hStream, dwMillisecondsToWait, pImageFrame)
+        NuiImageStreamGetNextFrame = ctypes.WINFUNCTYPE(
+            ctypes.c_long, ctypes.c_void_p,
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p
+        )(self._vtbl[9])
+
+        hr = NuiImageStreamGetNextFrame(self._sensor_ptr, stream_handle, ctypes.c_ulong(100), ctypes.byref(frame_buf))
+        if hr != 0:
+            return None
+
+        # Extract pFrameTexture pointer (offset 16 on 64-bit: 8 timestamp + 4 frame# + 4 type = 16, but check alignment)
+        # On 64-bit Windows: LARGE_INTEGER(8) + DWORD(4) + enum(4) + enum(4) + padding(4) = 24, then pointer at 24
+        # Actually: 8 + 4 + 4 + 4 = 20, pointer needs 8-byte alignment → padded to 24
+        texture_ptr_offset = 24  # pFrameTexture at offset 24 on 64-bit
+        texture_ptr = ctypes.c_void_p.from_buffer(frame_buf, texture_ptr_offset).value
+
+        if not texture_ptr:
+            self._release_frame(stream_handle, frame_buf)
+            return None
+
+        # Get texture vtable
+        # INuiFrameTexture vtable:
+        #  [0] QueryInterface  [1] AddRef  [2] Release
+        #  [3] BufferLen  [4] Pitch  [5] LockRect  [6] GetLevelDesc  [7] UnlockRect
+        tex_vtbl_ptr = ctypes.cast(texture_ptr, ctypes.POINTER(ctypes.c_void_p))[0]
+        tex_vtbl = ctypes.cast(tex_vtbl_ptr, ctypes.POINTER(ctypes.c_void_p * 10))[0]
+
+        # LockRect(this, UINT Level, NUI_LOCKED_RECT* pLockedRect, RECT* pRect, DWORD Flags)
+        # NUI_LOCKED_RECT: INT Pitch(4), INT size(4), byte* pBits(8) = 16 bytes on 64-bit
+        locked_rect = (ctypes.c_byte * 24)()  # padded
+
+        LockRect = ctypes.WINFUNCTYPE(
+            ctypes.c_long, ctypes.c_void_p,
+            ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong
+        )(tex_vtbl[5])
+        hr = LockRect(texture_ptr, 0, ctypes.byref(locked_rect), None, 0)
+        if hr != 0:
+            self._release_frame(stream_handle, frame_buf)
+            return None
+
+        # Extract NUI_LOCKED_RECT fields
+        pitch = ctypes.c_int.from_buffer(locked_rect, 0).value
+        size = ctypes.c_int.from_buffer(locked_rect, 4).value
+        pbits = ctypes.c_void_p.from_buffer(locked_rect, 8).value
+
+        if not pbits or size == 0:
+            self._unlock_and_release(texture_ptr, tex_vtbl, stream_handle, frame_buf)
+            return None
+
+        if is_color:
+            # Color: BGRA 640x480 = 640*480*4 = 1228800 bytes
+            expected = 640 * 480 * 4
+            if size < expected:
+                self._unlock_and_release(texture_ptr, tex_vtbl, stream_handle, frame_buf)
+                return None
+            buf = (ctypes.c_uint8 * expected).from_address(pbits)
+            arr = np.frombuffer(buf, dtype=np.uint8).reshape((480, 640, 4))
+            result = arr[:, :, :3].copy()  # BGRA -> BGR (drop alpha)
+        else:
+            # Depth: uint16 640x480, each pixel is depth_mm | (player_index & 0x7)
+            # Real depth = pixel >> 3
+            expected = 640 * 480 * 2
+            if size < expected:
+                self._unlock_and_release(texture_ptr, tex_vtbl, stream_handle, frame_buf)
+                return None
+            buf = (ctypes.c_uint16 * (640 * 480)).from_address(pbits)
+            raw = np.frombuffer(buf, dtype=np.uint16).reshape((480, 640)).copy()
+            # Extract depth in mm (shift right 3 to remove player index bits)
+            depth_mm = (raw >> 3).astype(np.float32)
+            # Clamp valid range
+            depth_mm[depth_mm < V1_DEPTH_MIN_MM] = 0.0
+            depth_mm[depth_mm > V1_DEPTH_MAX_MM] = 0.0
+            result = depth_mm
+
+        self._unlock_and_release(texture_ptr, tex_vtbl, stream_handle, frame_buf)
+        return result
+
+    def _unlock_and_release(self, texture_ptr, tex_vtbl, stream_handle, frame_buf):
+        import ctypes
+        try:
+            UnlockRect = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_uint)(tex_vtbl[7])
+            UnlockRect(texture_ptr, 0)
+        except Exception:
+            pass
+        self._release_frame(stream_handle, frame_buf)
+
+    def _release_frame(self, stream_handle, frame_buf):
+        import ctypes
+        try:
+            NuiImageStreamReleaseFrame = ctypes.WINFUNCTYPE(
+                ctypes.c_long, ctypes.c_void_p,
+                ctypes.c_void_p, ctypes.c_void_p
+            )(self._vtbl[10])
+            NuiImageStreamReleaseFrame(self._sensor_ptr, stream_handle, ctypes.byref(frame_buf))
+        except Exception:
+            pass
+
+    def close(self):
+        if self._sensor_ptr is not None:
+            try:
+                import ctypes
+                NuiShutdown = ctypes.WINFUNCTYPE(None, ctypes.c_void_p)(self._vtbl[4])
+                NuiShutdown(self._sensor_ptr)
+                # Release COM interface
+                Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(self._vtbl[2])
+                Release(self._sensor_ptr)
+            except Exception:
+                pass
+            self._sensor_ptr = None
+            self._vtbl = None
+            self._color_stream = None
+            self._depth_stream = None
+
+
+# ──────────────────────────────────────────────────────────────
+# Synthetic backend (no hardware)
 # ──────────────────────────────────────────────────────────────
 class SyntheticBackend(KinectBackend):
     def __init__(self, device_type: str = DEVICE_TYPE_V2):
@@ -676,8 +1112,10 @@ def create_backend(force_synthetic: bool = False, device_type: str = None) -> Ki
     if device_type == DEVICE_TYPE_V1:
         if IS_LINUX:
             return LinuxFreenectV1Backend()
+        elif IS_WINDOWS:
+            return WindowsKinectV1Backend()
         else:
-            logger.warning("Kinect v1 only supported on Linux, using synthetic")
+            logger.warning("Kinect v1 not supported on this OS, using synthetic")
             return SyntheticBackend(DEVICE_TYPE_V1)
 
     if device_type == DEVICE_TYPE_V2:
@@ -692,6 +1130,9 @@ def create_backend(force_synthetic: bool = False, device_type: str = None) -> Ki
     # Auto-detect: try v2 first, then v1
     if IS_WINDOWS:
         b = WindowsKinect2Backend()
+        if b.num_devices() > 0:
+            return b
+        b = WindowsKinectV1Backend()
         if b.num_devices() > 0:
             return b
         logger.warning("Windows: Kinect SDK not available, using synthetic backend")
@@ -721,9 +1162,15 @@ def create_backend_for_device(device_index: int) -> Tuple[KinectBackend, str]:
         (backend, device_type) tuple
     """
     if IS_WINDOWS:
-        b = WindowsKinect2Backend()
-        if b.num_devices() > device_index:
-            return b, DEVICE_TYPE_V2
+        v2 = WindowsKinect2Backend()
+        v2_count = v2.num_devices()
+        if device_index < v2_count:
+            return v2, DEVICE_TYPE_V2
+        v1 = WindowsKinectV1Backend()
+        v1_count = v1.num_devices()
+        v1_index = device_index - v2_count
+        if v1_index < v1_count:
+            return v1, DEVICE_TYPE_V1
         return SyntheticBackend(), DEVICE_TYPE_SYNTHETIC
 
     elif IS_LINUX:
@@ -752,6 +1199,7 @@ def count_devices() -> int:
     total = 0
     if IS_WINDOWS:
         total += WindowsKinect2Backend().num_devices()
+        total += WindowsKinectV1Backend().num_devices()
     elif IS_LINUX:
         total += LinuxFreenect2Backend().num_devices()
         total += LinuxFreenectV1Backend().num_devices()
@@ -770,6 +1218,7 @@ def count_devices_by_type() -> Tuple[int, int]:
 
     if IS_WINDOWS:
         v2_count = WindowsKinect2Backend().num_devices()
+        v1_count = WindowsKinectV1Backend().num_devices()
     elif IS_LINUX:
         v2_count = LinuxFreenect2Backend().num_devices()
         v1_count = LinuxFreenectV1Backend().num_devices()
@@ -801,9 +1250,18 @@ def enumerate_all_devices() -> list:
             idx += 1
 
     elif IS_WINDOWS:
+        # v1 devices (Kinect10.dll)
+        v1 = WindowsKinectV1Backend()
+        v1_count = v1.num_devices()
+        for i in range(v1_count):
+            devices.append({"index": idx, "hw_index": i, "type": "v1"})
+            idx += 1
+
+        # v2 devices (pykinect2 / Kinect for Windows SDK v2)
         v2 = WindowsKinect2Backend()
-        if v2.num_devices() > 0:
-            devices.append({"index": idx, "hw_index": 0, "type": "v2"})
+        v2_count = v2.num_devices()
+        for i in range(v2_count):
+            devices.append({"index": idx, "hw_index": i, "type": "v2"})
             idx += 1
 
     logger.info(f"Enumerated {len(devices)} Kinect device(s): "
