@@ -49,12 +49,20 @@ if(MN_WITH_OPENVR_CLIENT)
             IMPORTED_LOCATION "${openvr_SOURCE_DIR}/bin/win64/openvr_api.dll"
             IMPORTED_IMPLIB "${openvr_SOURCE_DIR}/lib/win64/openvr_api.lib"
             INTERFACE_INCLUDE_DIRECTORIES "${openvr_SOURCE_DIR}/headers")
+        set(MN_OPENVR_CLIENT_RUNTIME "${openvr_SOURCE_DIR}/bin/win64/openvr_api.dll"
+            CACHE INTERNAL "openvr client runtime library")
         set(MN_OPENVR_CLIENT_OK ON)
     elseif(UNIX AND NOT APPLE AND EXISTS "${openvr_SOURCE_DIR}/bin/linux64/libopenvr_api.so")
-        add_library(mn_openvr_client SHARED IMPORTED GLOBAL)
-        set_target_properties(mn_openvr_client PROPERTIES
-            IMPORTED_LOCATION "${openvr_SOURCE_DIR}/bin/linux64/libopenvr_api.so"
-            INTERFACE_INCLUDE_DIRECTORIES "${openvr_SOURCE_DIR}/headers")
+        # libopenvr_api.so has no SONAME, so linking it by path embeds that
+        # path as DT_NEEDED. Link with -l: instead so the loader resolves it
+        # by name through the $ORIGIN rpath (the lib is copied next to the
+        # executable).
+        add_library(mn_openvr_client INTERFACE)
+        target_include_directories(mn_openvr_client INTERFACE "${openvr_SOURCE_DIR}/headers")
+        target_link_directories(mn_openvr_client INTERFACE "${openvr_SOURCE_DIR}/bin/linux64")
+        target_link_libraries(mn_openvr_client INTERFACE "-l:libopenvr_api.so")
+        set(MN_OPENVR_CLIENT_RUNTIME "${openvr_SOURCE_DIR}/bin/linux64/libopenvr_api.so"
+            CACHE INTERNAL "openvr client runtime library")
         set(MN_OPENVR_CLIENT_OK ON)
     endif()
 endif()

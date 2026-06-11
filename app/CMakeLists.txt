@@ -14,10 +14,12 @@ endif()
 if(MN_OPENVR_CLIENT_OK)
     target_link_libraries(marionette PRIVATE mn_openvr_client)
     target_compile_definitions(marionette PRIVATE MN_HAS_OPENVR_CLIENT)
-    if(WIN32)
-        add_custom_command(TARGET marionette POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    $<TARGET_PROPERTY:mn_openvr_client,IMPORTED_LOCATION>
-                    $<TARGET_FILE_DIR:marionette>)
+    # Keep the runtime library next to the binary on both platforms.
+    add_custom_command(TARGET marionette POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${MN_OPENVR_CLIENT_RUNTIME}"
+                $<TARGET_FILE_DIR:marionette>)
+    if(UNIX)
+        set_target_properties(marionette PROPERTIES BUILD_RPATH "\$ORIGIN")
     endif()
 endif()

@@ -2,6 +2,8 @@
 #include <sstream>
 #include <string>
 
+#include <functional>
+
 namespace mn::log {
 
 enum class Level { Debug = 0, Info = 1, Warn = 2, Error = 3 };
@@ -9,6 +11,12 @@ enum class Level { Debug = 0, Info = 1, Warn = 2, Error = 3 };
 void setLevel(Level lvl);
 Level level();
 void write(Level lvl, const std::string& msg);
+
+// Optional secondary sink. Receives EVERY message (regardless of the console
+// level filter) so structured consumers (EventLog) see warnings even when the
+// console is quiet. Must be cheap and thread-safe; set empty to remove.
+using Sink = std::function<void(Level, const std::string&)>;
+void setSink(Sink sink);
 
 namespace detail {
 template <typename... Args> std::string fmt(Args&&... args) {

@@ -34,6 +34,14 @@ struct FusionConfig {
     float occlusionPenalty = 0.3f;    // weight multiplier for far-side joints
     OneEuroParams filter;             // applied per fused joint position
     bool boneLengthConstraint = true; // enforce calibrated bone lengths
+
+    // Cross-node outlier rejection: when >= 2 nodes contribute a joint, a
+    // sample farther than outlierThresholdMeters from the consensus of the
+    // OTHER contributors gets its weight multiplied by outlierWeightFactor.
+    // Guards against a miscalibrated or glitching sensor hijacking a joint.
+    bool outlierRejection = true;
+    float outlierThresholdMeters = 0.35f;
+    float outlierWeightFactor = 0.05f;
 };
 
 // Calibrated per-user bone lengths, indexed by child joint (length to parent).

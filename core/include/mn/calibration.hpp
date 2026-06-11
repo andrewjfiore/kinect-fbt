@@ -25,15 +25,20 @@ struct RigidFit {
 // Requires >= 3 pairs spanning a non-degenerate (non-collinear) set.
 RigidFit solveRigid(const std::vector<Vec3>& src, const std::vector<Vec3>& dst);
 
+// Standalone (not nested) so a {} default argument is valid on GCC: a nested
+// aggregate's NSDMIs cannot be used in default args while the enclosing class
+// is incomplete.
+struct PairCalibrationOptions {
+    float minConfidence = 0.5f;      // both views must exceed this per joint
+    float maxTimeDeltaSec = 0.05f;   // frame pairing window
+    size_t minSamples = 200;         // point pairs needed before solve()
+    std::vector<Joint> joints = {Joint::Head,   Joint::Hips,   Joint::WristL,
+                                 Joint::WristR, Joint::AnkleL, Joint::AnkleR};
+};
+
 class PairCalibrationSession {
 public:
-    struct Options {
-        float minConfidence = 0.5f;      // both views must exceed this per joint
-        float maxTimeDeltaSec = 0.05f;   // frame pairing window
-        size_t minSamples = 200;         // point pairs needed before solve()
-        std::vector<Joint> joints = {Joint::Head,   Joint::Hips,   Joint::WristL,
-                                     Joint::WristR, Joint::AnkleL, Joint::AnkleR};
-    };
+    using Options = PairCalibrationOptions;
 
     explicit PairCalibrationSession(Options opt = {});
 
