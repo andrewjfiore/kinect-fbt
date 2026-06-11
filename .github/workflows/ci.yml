@@ -1,0 +1,36 @@
+# Build + test on Windows (MSVC, default Visual Studio generator) and Linux
+# (gcc, default Makefiles/Ninja). The Kinect SDKs are not installed on CI
+# runners, so the kinect_v1/kinect_v2 backends auto-skip at configure time.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # FetchContent downloads (Eigen, nlohmann::json, doctest, OpenVR) land in
+      # build/_deps; cache them keyed on the declared versions in Deps.cmake.
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('cmake/Deps.cmake') }}
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DMN_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure

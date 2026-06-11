@@ -1,0 +1,49 @@
+{
+    "tick_hz": 60,
+    "calibration_file": "calibration.json",
+    "nodes": [
+        {
+            "id": "front",
+            "type": "mock",
+            "params": {
+                "pattern": "walk_in_place",
+                "rate_hz": 30,
+                "noise_m": 0.004,
+                "seed": 1,
+                "confidence": 0.9,
+                "view_pose": { "pos": [0.0, 0.9, -2.0], "rot": [1, 0, 0, 0] },
+                "extrinsic": { "pos": [0.0, 0.9, -2.0], "rot": [1, 0, 0, 0] }
+            }
+        },
+        {
+            "id": "back",
+            "type": "mock",
+            "params": {
+                "pattern": "walk_in_place",
+                "rate_hz": 30,
+                "noise_m": 0.004,
+                "seed": 2,
+                "confidence": 0.9,
+                "view_pose": { "pos": [0.0, 0.9, 2.0], "rot": [0, 0, 1, 0] },
+                "extrinsic": { "pos": [0.0, 0.9, 2.0], "rot": [0, 0, 1, 0] }
+            }
+        }
+    ],
+    "fusion": {
+        "stale_seconds": 0.15,
+        "inferred_weight": 0.25,
+        "min_confidence": 0.05,
+        "depth_noise_ref_m": 4.0,
+        "occlusion_penalty": 0.3,
+        "bone_length_constraint": false,
+        "filter": { "min_cutoff": 1.0, "beta": 0.05, "d_cutoff": 1.0 }
+    },
+    "mapping": {
+        "trackers": ["waist", "left_foot", "right_foot"],
+        "emit_head": true,
+        "velocity_smooth": 0.5
+    },
+    "endpoints": [
+        { "type": "osc", "params": { "host": "127.0.0.1", "port": 9001 } }
+    ]
+}

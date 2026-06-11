@@ -1,0 +1,7 @@
+{
+    "driver_marionette": {
+        "enable": true,
+        "port": 24190,
+        "blocks_standby": false
+    }
+}
