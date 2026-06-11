@@ -2,15 +2,17 @@
 // DashboardServer on loopback, exercised end-to-end with an httplib client:
 // status / skeleton / events / index, then a full pair-calibration job.
 
-// httplib first: it pulls winsock2.h before anything can include windows.h.
-#include <httplib.h>
-
-#include <doctest/doctest.h>
-
+// mn headers (Eigen) BEFORE httplib: glibc resolver headers pulled in by
+// httplib define macros that corrupt Eigen's templates when Eigen is parsed
+// afterwards. Safe on Windows too: no mn HEADER includes windows.h.
 #include "mn/config.hpp"
 #include "mn/pipeline.hpp"
 #include "mn_dashboard/dashboard.hpp"
 #include "mn_mock/mock.hpp"
+
+#include <httplib.h>
+
+#include <doctest/doctest.h>
 
 #include <nlohmann/json.hpp>
 

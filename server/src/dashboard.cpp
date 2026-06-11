@@ -2,11 +2,12 @@
 // documented in docs/DASHBOARD_API.md, and runs calibration jobs (pair / body /
 // playspace) on a single worker thread using the pipeline's observer hooks.
 
-// httplib first: it pulls winsock2.h before anything can include windows.h.
-#include <httplib.h>
-
-#include "web_embedded.hpp"
-
+// Include order matters on BOTH platforms, in opposite directions:
+//  - mn headers (Eigen) must come BEFORE httplib on Linux: glibc resolver
+//    headers pulled in by httplib define macros (e.g. a `res` rewrite) that
+//    corrupt Eigen's templates if Eigen is parsed afterwards.
+//  - httplib wants winsock2.h before windows.h on Windows; no mn HEADER
+//    includes windows.h (only .cpp files do), so this order is safe there.
 #include "mn_dashboard/dashboard.hpp"
 
 #include "mn/calibration.hpp"
@@ -18,6 +19,10 @@
 #include "mn/mapping.hpp"
 #include "mn/pipeline.hpp"
 #include "mn/skeleton.hpp"
+
+#include <httplib.h>
+
+#include "web_embedded.hpp"
 
 #include <nlohmann/json.hpp>
 
