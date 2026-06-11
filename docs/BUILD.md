@@ -1,8 +1,10 @@
 # Building Marionette
 
 Same CMake flow on Windows and Linux. All third-party dependencies (Eigen,
-nlohmann::json, doctest, OpenVR headers) are fetched automatically at configure
-time; you only need a compiler and CMake.
+nlohmann::json, doctest, cpp-httplib, OpenVR headers) are fetched
+automatically at configure time; you only need a compiler and CMake.
+cpp-httplib (header-only) is used solely by the dashboard module
+(`server/`); it is not fetched or linked when `MN_BUILD_DASHBOARD` is off.
 
 See also: [USAGE.md](USAGE.md) (running it), [CALIBRATION.md](CALIBRATION.md)
 (sensor setup), [DESIGN.md](DESIGN.md) (architecture).
@@ -69,6 +71,33 @@ native install (Windows or desktop Linux), not WSL.
 | `MN_BUILD_TESTS` | `ON` | Build the doctest suite (`mn_tests`, registered with CTest) |
 | `MN_BUILD_DRIVER` | `ON` | Build the SteamVR driver `driver_marionette` |
 | `MN_WITH_OPENVR_CLIENT` | `ON` | Link the prebuilt OpenVR client lib (enables `calibrate playspace`); auto-disables if the platform binary is missing from the OpenVR archive |
+| `MN_BUILD_DASHBOARD` | `ON` | Build the web dashboard (`mn_dashboard` + cpp-httplib); `OFF` removes the HTTP server and the `--no-dashboard`/`--dashboard-port` flags become no-ops |
+
+## Web dashboard embedding
+
+The dashboard UI is one file, `web/index.html`, embedded into the binary at
+build time: a custom command (`cmake/EmbedFile.cmake`) generates
+`build/generated/web_embedded.hpp` from it, and `mn_dashboard` compiles that
+in. The custom command declares `web/index.html` as a dependency, so editing
+the HTML and rebuilding picks the change up automatically - no manual
+regeneration or reconfigure step. For a faster frontend loop that skips the
+rebuild entirely, the server can serve the file from disk instead
+(`Options::webDirOverride` in `mn_dashboard`).
+
+## Hardware smoke test
+
+`tests/hardware/` builds `mn_hwsmoke`, a CTest entry labeled `hardware` that
+exercises whatever real sensors are attached. It is not part of the plain
+`ctest` quick path; run it explicitly:
+
+```sh
+ctest --test-dir build -L hardware -C Release --output-on-failure
+```
+
+When no compiled backend finds hardware, the binary exits **77**, which CTest
+maps to "skipped" via `SKIP_RETURN_CODE 77` - so the suite stays green on
+machines without Kinects while still failing loudly on a machine where a
+sensor is present but broken.
 
 ## SteamVR driver output and install
 

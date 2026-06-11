@@ -10,6 +10,13 @@
 - [x] Tests + Windows/Linux CI
 
 ## Phase 2 - hardware bring-up & quality
+- [x] Web dashboard: live status, skeleton view, events, calibration wizards,
+      onboarding tutorial (pulled forward from the phase-4 GUI item)
+- [x] `marionette doctor`: backend/sensor/config/calibration/ports/SteamVR probe
+      (`--json` for machine use)
+- [x] Node watchdog: factory-recreate + restart with backoff for silent sensors
+- [x] Cross-node outlier rejection in fusion (consensus-of-others downweighting)
+- [x] Hardware smoke test (`ctest -L hardware`, skips cleanly without sensors)
 - [ ] On-hardware validation: 1x Kinect v2, 3-point FBT in VRChat via ALVR
 - [ ] Pair calibration UX polish (live sample-coverage feedback, RMSE gate)
 - [ ] Playspace anchor validation against OpenVR-SpaceCalibrator
@@ -23,6 +30,7 @@
 - [ ] Multi-v2-per-box USB topology guide + bring-up tooling
 
 ## Phase 4 - polish
-- [ ] GUI (status, placement viz, calibration wizard)
+- [x] GUI (status, placement viz, calibration wizard) - shipped early as the
+      phase-2 web dashboard
 - [ ] Installer + SteamVR driver auto-registration
 - [ ] Quest 2 QoS presets (lower bitrate budgets, stronger prediction)

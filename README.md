@@ -19,6 +19,12 @@ Strings from above, moving a body.
     Virtual Desktop, Steam Link, Quest Link for Quest 2/3 PCVR).
   - **VRChat OSC Trackers**: direct to the headset over LAN, no PCVR stream required
     (Quest standalone).
+- Serves a local web dashboard at http://127.0.0.1:8211 while running: live skeleton view,
+  pipeline status, event feed, calibration wizards, and an onboarding tutorial.
+- `marionette doctor` health-checks the whole stack (backends, sensors, config,
+  calibration, ports, SteamVR driver registration), with `--json` for scripts.
+- Self-heals at runtime: a watchdog recreates and restarts capture nodes that go silent,
+  and structured warning/error events are tracked in-process (dashboard Events tab).
 
 ## Layout
 
@@ -31,19 +37,27 @@ Strings from above, moving a body.
 | `endpoints/osc/` | VRChat OSC Trackers endpoint |
 | `endpoints/openvr_bridge/` | UDP bridge feeding the OpenVR driver |
 | `driver/openvr/` | `driver_marionette` SteamVR driver (virtual trackers) |
-| `app/` | `marionette` CLI: run, calibrate, record, replay |
-| `docs/` | Design, build, calibration guides |
+| `server/` | Web dashboard: embedded UI + JSON API (cpp-httplib) |
+| `web/` | The dashboard's single-file UI (`index.html`, embedded at build time) |
+| `app/` | `marionette` CLI: run, record, calibrate, doctor |
+| `docs/` | Design, build, usage, calibration, tutorial, dashboard API |
 
 ## Quick start
 
-See [docs/BUILD.md](docs/BUILD.md) and [docs/USAGE.md](docs/USAGE.md).
+See [docs/BUILD.md](docs/BUILD.md) and [docs/USAGE.md](docs/USAGE.md); first time,
+start with [docs/TUTORIAL.md](docs/TUTORIAL.md).
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ctest --test-dir build -C Release
+ctest --test-dir build -C Release -L hardware  # optional: smoke-test attached sensors
 build/app/marionette run -c config/demo.json   # no hardware needed (mock nodes)
 ```
+
+On Windows the Visual Studio generator is multi-config, so the binary lands at
+`build\app\Release\marionette.exe` (not `build/app/`). The demo run also serves the
+dashboard at http://127.0.0.1:8211.
 
 ## Standing on the shoulders of
 

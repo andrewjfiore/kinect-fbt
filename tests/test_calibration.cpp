@@ -151,7 +151,11 @@ TEST_CASE("PairCalibrationSession recovers a known relative pose end-to-end") {
     const mn::Pose truth{mn::Vec3(1.2f, 0.1f, -0.8f), relRot};
     const mn::Pose truthInv = truth.inverse();
 
-    mn::PairCalibrationSession session; // defaults: minSamples 200, 6 joints
+    // Defaults except the stillness gate: this test teleports the body each
+    // frame on purpose (full-rank cloud), which a speed gate must reject.
+    mn::PairCalibrationSession::Options e2eOpt;
+    e2eOpt.maxJointSpeed = 0.0f;
+    mn::PairCalibrationSession session(e2eOpt);
 
     // Before enough samples accumulate, solve() must fail.
     CHECK(session.sampleCount() == 0u);
@@ -189,7 +193,9 @@ TEST_CASE("PairCalibrationSession recovers a known relative pose end-to-end") {
 }
 
 TEST_CASE("PairCalibrationSession gates samples on time, confidence, and state") {
-    mn::PairCalibrationSession session;
+    mn::PairCalibrationSession::Options gateOpt;
+    gateOpt.maxJointSpeed = 0.0f; // single-frame subcases cannot establish stillness
+    mn::PairCalibrationSession session(gateOpt);
     std::array<mn::Vec3, 6> pos;
     for (size_t i = 0; i < kBodyShape.size(); ++i) {
         pos[i] = mn::Vec3(1.0f, 1.0f, 1.0f) + kBodyShape[i].second;
@@ -221,6 +227,94 @@ TEST_CASE("PairCalibrationSession gates samples on time, confidence, and state")
         session.addFramePair(ref, frameWithJoints(pos, 0.01));
         CHECK(session.sampleCount() == 5u);
     }
+}
+
+TEST_CASE("PairCalibrationSession stillness gate") {
+    mn::PairCalibrationSession session; // default maxJointSpeed 0.2 m/s
+
+    std::array<mn::Vec3, 6> pos;
+    for (size_t i = 0; i < kBodyShape.size(); ++i) {
+        pos[i] = mn::Vec3(0.5f, 1.0f, 2.0f) + kBodyShape[i].second;
+    }
+
+    SUBCASE("still body accumulates after the second distinct frame") {
+        for (int k = 0; k < 5; ++k) {
+            const double t = 0.033 * static_cast<double>(k);
+            session.addFramePair(frameWithJoints(pos, t), frameWithJoints(pos, t + 0.01));
+        }
+        // Frame 0 establishes tracks (not still yet); frames 1..4 contribute.
+        CHECK(session.sampleCount() == 4u * kBodyShape.size());
+    }
+
+    SUBCASE("fast motion is rejected") {
+        for (int k = 0; k < 5; ++k) {
+            const double t = 0.033 * static_cast<double>(k);
+            std::array<mn::Vec3, 6> moved = pos;
+            for (auto& p : moved) {
+                p.x() += 0.05f * static_cast<float>(k); // ~1.5 m/s
+            }
+            session.addFramePair(frameWithJoints(moved, t), frameWithJoints(moved, t + 0.01));
+        }
+        CHECK(session.sampleCount() == 0u);
+    }
+
+    SUBCASE("slow drift passes the gate") {
+        for (int k = 0; k < 5; ++k) {
+            const double t = 0.033 * static_cast<double>(k);
+            std::array<mn::Vec3, 6> moved = pos;
+            for (auto& p : moved) {
+                p.x() += 0.003f * static_cast<float>(k); // ~0.09 m/s
+            }
+            session.addFramePair(frameWithJoints(moved, t), frameWithJoints(moved, t + 0.01));
+        }
+        CHECK(session.sampleCount() == 4u * kBodyShape.size());
+    }
+}
+
+TEST_CASE("PairCalibrationSession trimmed solve survives garbage pairs") {
+    const mn::Pose truth{mn::Vec3(0.8f, -0.2f, 1.1f),
+                         mn::Quat(Eigen::AngleAxisf(120.0f * kDegToRad, mn::Vec3::UnitY()))
+                             .normalized()};
+    const mn::Pose truthInv = truth.inverse();
+
+    auto feed = [&](mn::PairCalibrationSession& session) {
+        std::mt19937 rng(77u);
+        for (int k = 0; k < 60; ++k) {
+            const mn::Vec3 root = mn::Vec3(0.0f, 1.0f, 1.5f) + randomVec(rng, -0.5f, 0.5f);
+            std::array<mn::Vec3, 6> refPos;
+            std::array<mn::Vec3, 6> tgtPos;
+            for (size_t i = 0; i < kBodyShape.size(); ++i) {
+                const mn::Vec3 p = root + kBodyShape[i].second + randomVec(rng, -0.03f, 0.03f);
+                refPos[i] = p;
+                tgtPos[i] = truthInv.apply(p);
+            }
+            // Every 6th frame the target's WristL estimate is garbage (the
+            // kind of sporadic misfire a real Kinect v1 produces).
+            if (k % 6 == 0) {
+                tgtPos[2] += mn::Vec3(0.9f, -0.5f, 0.4f);
+            }
+            const double t = 0.033 * static_cast<double>(k);
+            session.addFramePair(frameWithJoints(refPos, t), frameWithJoints(tgtPos, t + 0.01));
+        }
+    };
+
+    mn::PairCalibrationSession::Options opt;
+    opt.maxJointSpeed = 0.0f; // teleporting synthetic cloud
+    opt.trimOutliers = true;
+    mn::PairCalibrationSession trimmed(opt);
+    feed(trimmed);
+    const mn::RigidFit good = trimmed.solve();
+    REQUIRE(good.ok);
+    CHECK(good.rmse < 0.04f);
+    CHECK((good.transform.pos - truth.pos).norm() < 0.05f);
+    CHECK(mn::quatAngle(good.transform.rot, truth.rot) < 0.05f);
+
+    opt.trimOutliers = false;
+    mn::PairCalibrationSession raw(opt);
+    feed(raw);
+    const mn::RigidFit bad = raw.solve();
+    REQUIRE(bad.ok);
+    CHECK(bad.rmse > good.rmse * 2.0f); // trimming visibly tightens the fit
 }
 
 TEST_CASE("solveAnchor maps world points into the external frame") {

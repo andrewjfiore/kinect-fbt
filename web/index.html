@@ -1,0 +1,2235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<!-- inline favicon: keeps the page at zero external requests (no /favicon.ico probe) -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'><circle cx='8' cy='8' r='7' fill='%2322d3ee'/></svg>">
+<title>Marionette</title>
+<style>
+/* ================================================================================
+   Marionette dashboard - single file, zero external requests.
+   Sections: tokens / reset / backdrop / glass / layout / typography / components /
+   overview / skeleton / calibration / events / tutorial / veil / motion / responsive
+   ================================================================================ */
+
+/* ---------- tokens ---------- */
+:root {
+    --bg: #05070d;
+    --ink: #e9eef7;
+    --ink-dim: rgba(233, 238, 247, 0.60);
+    --ink-faint: rgba(233, 238, 247, 0.36);
+    --accent: #22d3ee;
+    --accent-2: #5eead4;
+    --warn: #fbbf24;
+    --err: #fb7185;
+    --glass: rgba(255, 255, 255, 0.06);
+    --glass-2: rgba(255, 255, 255, 0.09);
+    --line: rgba(255, 255, 255, 0.10);
+    --line-top: rgba(255, 255, 255, 0.28);
+    --r: 22px;
+    --font: -apple-system, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI",
+        system-ui, sans-serif;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+}
+
+/* ---------- reset ---------- */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 14px/1.55 var(--font);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+}
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; cursor: pointer; }
+code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    padding: 1px 6px;
+    white-space: nowrap;
+}
+:focus-visible {
+    outline: 2px solid rgba(34, 211, 238, 0.85);
+    outline-offset: 2px;
+    border-radius: 8px;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- backdrop: drifting orbs + grain ---------- */
+.backdrop { position: fixed; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
+.orb { position: absolute; border-radius: 50%; will-change: transform; }
+.orb-a {
+    width: 64vmax; height: 64vmax; left: -20vmax; top: -26vmax;
+    background: radial-gradient(circle, rgba(99, 102, 241, 0.17) 0%, transparent 62%);
+    animation: drift-a 90s ease-in-out infinite alternate;
+}
+.orb-b {
+    width: 56vmax; height: 56vmax; right: -18vmax; top: -10vmax;
+    background: radial-gradient(circle, rgba(34, 211, 238, 0.13) 0%, transparent 60%);
+    animation: drift-b 70s ease-in-out infinite alternate;
+}
+.orb-c {
+    width: 58vmax; height: 58vmax; left: 8vmax; bottom: -30vmax;
+    background: radial-gradient(circle, rgba(217, 70, 239, 0.10) 0%, transparent 60%);
+    animation: drift-c 110s ease-in-out infinite alternate;
+}
+.orb-d {
+    width: 40vmax; height: 40vmax; right: 4vmax; bottom: -12vmax;
+    background: radial-gradient(circle, rgba(94, 234, 212, 0.09) 0%, transparent 58%);
+    animation: drift-d 80s ease-in-out infinite alternate;
+}
+@keyframes drift-a { to { transform: translate(9vmax, 7vmax) scale(1.10); } }
+@keyframes drift-b { to { transform: translate(-7vmax, 9vmax) scale(0.94); } }
+@keyframes drift-c { to { transform: translate(10vmax, -6vmax) scale(1.07); } }
+@keyframes drift-d { to { transform: translate(-8vmax, -7vmax) scale(1.12); } }
+.grain {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    opacity: 0.045; pointer-events: none; z-index: 1; mix-blend-mode: overlay;
+}
+
+/* ---------- glass surfaces ---------- */
+.glass, .card {
+    position: relative;
+    background: var(--glass);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    box-shadow:
+        inset 0 1px 0 var(--line-top),
+        0 18px 50px rgba(2, 6, 18, 0.55),
+        0 4px 16px rgba(2, 6, 18, 0.40);
+    backdrop-filter: blur(22px) saturate(170%);
+    -webkit-backdrop-filter: blur(22px) saturate(170%);
+}
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+    .glass, .card { background: rgba(15, 21, 36, 0.94); }
+}
+.card { padding: 20px 22px; transition: transform 0.35s ease, background 0.35s ease; }
+.card:hover { background: var(--glass-2); transform: translateY(-1px); }
+.card::after { /* specular sweep */
+    content: "";
+    position: absolute; inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: linear-gradient(105deg,
+        transparent 42%, rgba(255, 255, 255, 0.09) 50%, transparent 58%);
+    background-size: 260% 100%;
+    background-position: 135% 0;
+    transition: background-position 1.1s ease;
+}
+.card:hover::after { background-position: -35% 0; }
+.tile {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 16px;
+    padding: 14px 16px;
+}
+
+/* ---------- layout ---------- */
+.topbar {
+    margin: 14px 18px 0;
+    padding: 10px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 5;
+    flex: none;
+}
+.shell { flex: 1; display: flex; min-height: 0; padding: 14px 18px 18px; gap: 16px; z-index: 2; }
+.rail {
+    width: 188px; flex: none;
+    padding: 12px 10px;
+    display: flex; flex-direction: column; gap: 4px;
+    align-self: flex-start;
+}
+.content { flex: 1; min-width: 0; overflow-y: auto; padding: 2px 6px 32px 2px; }
+.panel { max-width: 1280px; margin: 0 auto; }
+.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 18px; }
+.span4 { grid-column: span 4; }
+.span5 { grid-column: span 5; }
+.span7 { grid-column: span 7; }
+.span12 { grid-column: span 12; }
+
+/* ---------- typography ---------- */
+.overline {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 12px;
+}
+.hero-num {
+    font-size: 46px;
+    font-weight: 200;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    font-variant-numeric: tabular-nums;
+}
+.unit { font-size: 20px; font-weight: 300; color: var(--ink-dim); margin-left: 3px; }
+.sub { font-size: 12px; color: var(--ink-dim); }
+h2.card-title { font-size: 15px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- components ---------- */
+.btn {
+    border: none;
+    border-radius: 12px;
+    padding: 8px 16px;
+    font-weight: 600;
+    font-size: 13px;
+    transition: filter 0.2s ease, background 0.2s ease;
+}
+.btn-primary {
+    background: linear-gradient(135deg, rgba(34, 211, 238, 0.92), rgba(94, 234, 212, 0.88));
+    color: #03222b;
+    box-shadow: 0 4px 18px rgba(34, 211, 238, 0.25);
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+.btn-ghost {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--line);
+    color: var(--ink);
+}
+.btn-ghost:hover:not(:disabled) { background: rgba(255, 255, 255, 0.10); }
+.btn:disabled { opacity: 0.38; cursor: not-allowed; }
+.btn-danger { background: rgba(251, 113, 133, 0.16); border: 1px solid rgba(251, 113, 133, 0.4);
+    color: #ffd3da; }
+.chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.03em;
+    border-radius: 999px; padding: 2px 9px;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    color: var(--ink-dim);
+    white-space: nowrap;
+}
+.chip-ok { background: rgba(94, 234, 212, 0.12); border-color: rgba(94, 234, 212, 0.30);
+    color: #8ff3e2; }
+.chip-warn { background: rgba(251, 191, 36, 0.12); border-color: rgba(251, 191, 36, 0.32);
+    color: #ffd778; }
+.chip-err { background: rgba(251, 113, 133, 0.13); border-color: rgba(251, 113, 133, 0.35);
+    color: #ffaab6; }
+.bar {
+    height: 6px; border-radius: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+}
+.bar-fill {
+    height: 100%; width: 0%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width 0.35s ease;
+}
+select, input[type="number"] {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--ink);
+    font: inherit;
+    padding: 7px 10px;
+    width: 100%;
+}
+select option { background: #0d1322; color: var(--ink); }
+label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10px 0 4px; }
+.seg { display: inline-flex; gap: 4px; background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--line); border-radius: 12px; padding: 3px; }
+.seg-btn {
+    border: none; background: transparent; color: var(--ink-dim);
+    border-radius: 9px; padding: 5px 14px; font-size: 13px; font-weight: 600;
+}
+.seg-btn[aria-pressed="true"] { background: rgba(34, 211, 238, 0.16); color: #aef3ff; }
+
+/* ---------- topbar pieces ---------- */
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-name { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.brand-sub { font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.top-status { display: flex; align-items: center; gap: 10px; }
+.event-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 5px 13px;
+    font-size: 12px;
+    color: var(--ink-dim);
+}
+.event-badge:hover { background: rgba(255, 255, 255, 0.09); }
+.event-badge .b-warn { color: var(--warn); font-weight: 700; }
+.event-badge .b-err { color: var(--err); font-weight: 700; }
+.conn-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 5px 14px;
+    font-size: 12px; font-weight: 600;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint); flex: none; }
+.dot.live {
+    background: var(--accent-2);
+    animation: pulse 2.4s ease-in-out infinite;
+}
+.dot.dead { background: var(--err); box-shadow: 0 0 8px rgba(251, 113, 133, 0.6); }
+@keyframes pulse {
+    0%, 100% { box-shadow: 0 0 3px rgba(94, 234, 212, 0.5); }
+    50% { box-shadow: 0 0 13px rgba(94, 234, 212, 0.95); }
+}
+
+/* ---------- rail navigation ---------- */
+.tab-btn {
+    display: flex; align-items: center; gap: 11px;
+    width: 100%;
+    padding: 10px 13px;
+    border: 1px solid transparent;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--ink-dim);
+    font-size: 13px; font-weight: 600;
+    text-align: left;
+}
+.tab-btn svg { flex: none; opacity: 0.8; }
+.tab-btn:hover { background: rgba(255, 255, 255, 0.05); color: var(--ink); }
+.tab-btn[aria-current="page"] {
+    background: rgba(34, 211, 238, 0.11);
+    border-color: rgba(34, 211, 238, 0.22);
+    color: #b5f3ff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+/* ---------- overview ---------- */
+.hero-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 26px; }
+.metric .overline { margin-bottom: 6px; }
+.hero-foot { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+.nodes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 12px; }
+.node-card .nc-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.node-icon { width: 34px; height: 34px; border-radius: 10px; flex: none;
+    background: rgba(34, 211, 238, 0.10); border: 1px solid rgba(34, 211, 238, 0.18);
+    display: flex; align-items: center; justify-content: center; color: #9be9f7; }
+.nc-id { font-weight: 700; font-size: 14px; }
+.nc-type { font-size: 11px; color: var(--ink-faint); letter-spacing: 0.05em;
+    text-transform: uppercase; }
+.run-dot { width: 8px; height: 8px; border-radius: 50%; margin-left: auto; flex: none; }
+.run-dot.on { background: var(--accent-2); box-shadow: 0 0 7px rgba(94, 234, 212, 0.7); }
+.run-dot.off { background: var(--err); }
+.nc-stats { display: flex; gap: 22px; margin-bottom: 10px; }
+.nc-stat .v { font-size: 21px; font-weight: 300; font-variant-numeric: tabular-nums; }
+.nc-stat .k { font-size: 11px; color: var(--ink-faint); }
+.nc-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.nc-err { font-size: 12px; color: #ffaab6; margin-top: 8px; word-break: break-word; }
+.ep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px; }
+.ep-card { display: flex; gap: 12px; align-items: center; }
+.kv { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06); font-size: 13px; }
+.kv:last-of-type { border-bottom: none; }
+.kv .k { color: var(--ink-dim); }
+.empty-note { color: var(--ink-faint); font-size: 13px; padding: 8px 2px; }
+
+/* ---------- skeleton ---------- */
+.skel-card { padding: 16px; }
+.skel-head { display: flex; align-items: baseline; justify-content: space-between;
+    margin: 4px 8px 12px; gap: 10px; flex-wrap: wrap; }
+.skel-wrap { position: relative; height: clamp(380px, calc(100vh - 290px), 760px); }
+#skel-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.view-tag {
+    position: absolute; top: 10px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
+    color: var(--ink-faint);
+    pointer-events: none;
+}
+.view-tag.left { left: 14px; }
+.view-tag.right { left: calc(50% + 21px); }
+.nobody {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+}
+.nobody-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    box-shadow: inset 0 1px 0 var(--line-top);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    padding: 18px 28px;
+    text-align: center;
+    color: var(--ink-dim);
+    font-size: 13px;
+}
+.nobody-card strong { display: block; color: var(--ink); font-size: 15px; margin-bottom: 3px; }
+
+/* ---------- calibration ---------- */
+.calib-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.calib-head .overline { margin: 0; }
+#calib-state { font-size: 13px; color: var(--ink-dim); flex: 1; min-width: 200px; }
+.wizard p.desc { font-size: 12.5px; color: var(--ink-dim); margin: 4px 0 10px; }
+.wiz-phase { font-size: 11px; color: var(--ink-faint); letter-spacing: 0.05em;
+    text-transform: uppercase; margin: 10px 0 5px; min-height: 14px;
+    font-variant-numeric: tabular-nums; }
+.wiz-msg { font-size: 12.5px; margin: 10px 0 0; min-height: 18px; word-break: break-word; }
+.wiz-msg.ok { color: #8ff3e2; }
+.wiz-msg.err { color: #ffaab6; }
+.wiz-actions { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
+.rmse-block { margin-top: 12px; display: flex; align-items: baseline; gap: 10px;
+    flex-wrap: wrap; }
+.rmse-num { font-size: 34px; font-weight: 200; font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em; }
+.rmse-advice { font-size: 12px; color: var(--ink-dim); width: 100%; }
+.hint { font-size: 12px; color: var(--ink-faint); margin-top: 8px; }
+
+/* ---------- events ---------- */
+.ev-card { padding: 18px 20px; display: flex; flex-direction: column;
+    height: calc(100vh - 175px); min-height: 380px; }
+.ev-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 12px; }
+.ev-head .overline { margin: 0 12px 0 0; }
+.pill-btn {
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--ink-faint);
+    border-radius: 999px;
+    padding: 3px 12px;
+    font-size: 11.5px; font-weight: 600;
+}
+.pill-btn[aria-pressed="true"] { color: var(--ink); background: rgba(255, 255, 255, 0.10);
+    border-color: rgba(255, 255, 255, 0.22); }
+.pill-btn .cnt { font-variant-numeric: tabular-nums; opacity: 0.75; margin-left: 4px; }
+.pill-btn.p-warn[aria-pressed="true"] { color: #ffd778; border-color: rgba(251,191,36,0.4); }
+.pill-btn.p-error[aria-pressed="true"] { color: #ffaab6; border-color: rgba(251,113,133,0.4); }
+.follow-btn { margin-left: auto; }
+.ev-list { flex: 1; overflow-y: auto; border-top: 1px solid rgba(255, 255, 255, 0.07);
+    padding-top: 6px; }
+.ev { display: flex; gap: 10px; align-items: baseline; padding: 5px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04); font-size: 13px; }
+.ev-t { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); flex: none;
+    width: 64px; }
+.ev-chip { flex: none; width: 52px; text-align: center; font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase; border-radius: 999px;
+    padding: 1px 0; }
+.ev-chip.c-debug { color: var(--ink-faint); background: rgba(255, 255, 255, 0.05); }
+.ev-chip.c-info { color: #b9e7f2; background: rgba(34, 211, 238, 0.10); }
+.ev-chip.c-warn { color: #ffd778; background: rgba(251, 191, 36, 0.13); }
+.ev-chip.c-error { color: #ffaab6; background: rgba(251, 113, 133, 0.14); }
+.ev-msg { word-break: break-word; min-width: 0; }
+.ev.ev-debug .ev-msg { color: var(--ink-faint); }
+.ev-list.hide-debug .ev-debug { display: none; }
+.ev-list.hide-info .ev-info { display: none; }
+.ev-list.hide-warn .ev-warn { display: none; }
+.ev-list.hide-error .ev-error { display: none; }
+
+/* ---------- tutorial ---------- */
+.tut-wrap { display: flex; gap: 16px; align-items: flex-start; }
+.stepper { width: 196px; flex: none; padding: 10px; display: flex; flex-direction: column;
+    gap: 2px; }
+.step-btn {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; border: none; background: transparent;
+    color: var(--ink-dim);
+    padding: 9px 10px; border-radius: 12px;
+    font-size: 12.5px; font-weight: 600; text-align: left;
+}
+.step-btn:hover { background: rgba(255, 255, 255, 0.05); }
+.step-ix {
+    width: 22px; height: 22px; flex: none;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.step-btn[aria-current="step"] { color: #b5f3ff; background: rgba(34, 211, 238, 0.10); }
+.step-btn[aria-current="step"] .step-ix { border-color: rgba(34, 211, 238, 0.6);
+    color: #aef3ff; }
+.step-btn.done .step-ix { background: rgba(94, 234, 212, 0.15);
+    border-color: rgba(94, 234, 212, 0.4); color: #8ff3e2; }
+.tut-card { flex: 1; min-width: 0; }
+.tut-page h2 { font-size: 22px; font-weight: 650; letter-spacing: -0.015em; margin: 2px 0 8px; }
+.tut-page h3 { font-size: 14px; font-weight: 700; margin: 0 0 8px; }
+.tut-lede { color: var(--ink-dim); font-size: 14px; max-width: 62ch; }
+.tut-note { font-size: 12.5px; color: var(--ink-dim); border-left: 2px solid
+    rgba(34, 211, 238, 0.5); padding-left: 12px; margin: 14px 0; }
+.tut-nav { display: flex; align-items: center; gap: 10px; margin-top: 22px;
+    border-top: 1px solid rgba(255, 255, 255, 0.07); padding-top: 16px; }
+.tut-progress { font-size: 12px; color: var(--ink-faint); margin: 0 auto;
+    font-variant-numeric: tabular-nums; }
+.path-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
+.path-card ul, .path-card ol { margin: 8px 0 0; padding-left: 18px; font-size: 13px;
+    color: var(--ink-dim); }
+.path-card li { margin: 5px 0; }
+.path-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rules { padding-left: 18px; font-size: 13px; color: var(--ink-dim); }
+.rules li { margin: 6px 0; }
+.rules strong { color: var(--ink); }
+.cal-steps { padding-left: 20px; font-size: 13.5px; }
+.cal-steps li { margin: 10px 0; color: var(--ink-dim); }
+.cal-steps strong { color: var(--ink); }
+.welcome-banner { margin-bottom: 18px; display: flex; align-items: center; gap: 16px;
+    flex-wrap: wrap; }
+.welcome-banner p { margin: 4px 0 0; color: var(--ink-dim); font-size: 13px; }
+.welcome-banner .grow { flex: 1; min-width: 220px; }
+.flow-svg { width: 100%; max-width: 640px; height: auto; margin: 14px 0; display: block; }
+.flow-box rect { fill: rgba(255, 255, 255, 0.05); stroke: rgba(255, 255, 255, 0.16); }
+.flow-box.hub rect { fill: rgba(34, 211, 238, 0.10); stroke: rgba(34, 211, 238, 0.4); }
+.flow-box text { fill: var(--ink); font-size: 13px; font-weight: 600; text-anchor: middle;
+    font-family: var(--font); }
+.flow-box text.s { fill: var(--ink-faint); font-size: 10px; font-weight: 400; }
+.flow { stroke: rgba(34, 211, 238, 0.65); stroke-width: 2; fill: none;
+    stroke-dasharray: 7 7; animation: dash 1.6s linear infinite; }
+@keyframes dash { to { stroke-dashoffset: -28; } }
+.room-svg { width: 100%; max-width: 420px; height: auto; display: block; margin: 14px 0 6px; }
+.room-wall { fill: rgba(255, 255, 255, 0.03); stroke: rgba(255, 255, 255, 0.15); }
+.room-area { fill: rgba(34, 211, 238, 0.05); stroke: rgba(34, 211, 238, 0.32);
+    stroke-dasharray: 5 5; }
+.room-person circle { fill: rgba(233, 238, 247, 0.85); }
+.room-person line { stroke: rgba(233, 238, 247, 0.85); stroke-width: 2; }
+.room-sen path { fill: rgba(94, 234, 212, 0.10); stroke: rgba(94, 234, 212, 0.55);
+    stroke-width: 1.5; }
+.room-sen rect { fill: rgba(94, 234, 212, 0.75); }
+.room-sen text { fill: var(--ink-dim); font-size: 11px; font-family: var(--font); }
+.room-note { font-size: 13px; color: var(--ink-dim); min-height: 38px; max-width: 56ch; }
+
+/* ---------- disconnected veil ---------- */
+.veil {
+    position: fixed; inset: 0; z-index: 60;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(5, 7, 13, 0.55);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+.veil-card { padding: 30px 38px; text-align: center; max-width: 360px; }
+.veil-card h2 { margin: 12px 0 6px; font-size: 19px; font-weight: 650; }
+.veil-card p { color: var(--ink-dim); font-size: 13px; margin: 0 0 18px; }
+.veil-card .num { color: var(--ink); font-weight: 700; }
+
+/* ---------- motion: orchestrated load + tab fade ---------- */
+@keyframes rise {
+    from { opacity: 0; transform: translateY(16px); filter: blur(10px); }
+    to { opacity: 1; transform: none; filter: none; }
+}
+.rise { animation: rise 0.7s cubic-bezier(0.22, 0.8, 0.26, 1) both;
+    animation-delay: var(--d, 0ms); }
+@keyframes fadein {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+}
+.panel.show { animation: fadein 0.28s ease both; }
+
+@media (prefers-reduced-motion: reduce) {
+    .orb, .dot.live, .flow { animation: none !important; }
+    .rise, .panel.show { animation: none !important; }
+    .card, .card::after, .bar-fill { transition: none !important; }
+    .card:hover { transform: none; }
+    .card::after { display: none; }
+}
+
+/* ---------- responsive ---------- */
+@media (max-width: 1150px) {
+    .span4 { grid-column: span 6; }
+    .span5, .span7 { grid-column: span 12; }
+    .hero-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 920px) {
+    .shell { flex-direction: column; }
+    .rail { width: 100%; flex-direction: row; overflow-x: auto; }
+    .tut-wrap { flex-direction: column; }
+    .stepper { width: 100%; flex-direction: row; overflow-x: auto; }
+    .path-cards { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+    .grid > .card { grid-column: span 12; }
+    .span4 { grid-column: span 12; }
+}
+</style>
+</head>
+<body>
+
+<!-- ================= backdrop ================= -->
+<div class="backdrop" aria-hidden="true">
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="orb orb-c"></div>
+    <div class="orb orb-d"></div>
+</div>
+<svg class="grain" aria-hidden="true">
+    <filter id="grain-f">
+        <feTurbulence type="fractalNoise" baseFrequency="0.82" numOctaves="2"
+            stitchTiles="stitch"/>
+        <feColorMatrix type="saturate" values="0"/>
+    </filter>
+    <rect width="100%" height="100%" filter="url(#grain-f)"/>
+</svg>
+
+<!-- ================= top bar ================= -->
+<header class="topbar glass rise" style="--d:0ms">
+    <div class="brand">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 4h16" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+            <path d="M8 4v6M16 4v6" stroke="#22d3ee" stroke-width="1.4"
+                stroke-dasharray="2 2"/>
+            <circle cx="8" cy="12" r="2" fill="#22d3ee"/>
+            <circle cx="16" cy="12" r="2" fill="#22d3ee"/>
+            <path d="M8 14c0 3 2 5 4 5s4-2 4-5" stroke="#5eead4" stroke-width="1.6"
+                stroke-linecap="round"/>
+        </svg>
+        <span class="brand-name">Marionette</span>
+        <span class="brand-sub num" id="app-version"></span>
+    </div>
+    <div class="top-status">
+        <button class="event-badge" id="event-badge" type="button"
+            aria-label="Open events log">
+            <span id="badge-total" class="num">0 events</span>
+            <span class="b-warn num" id="badge-warn" hidden>0</span>
+            <span class="b-err num" id="badge-err" hidden>0</span>
+        </button>
+        <div class="conn-pill" id="conn-pill" role="status" aria-live="polite">
+            <span class="dot" id="conn-dot"></span><span id="conn-text">Connecting</span>
+        </div>
+    </div>
+</header>
+
+<div class="shell">
+
+<!-- ================= rail navigation ================= -->
+<nav class="rail glass rise" style="--d:60ms" aria-label="Sections">
+    <button class="tab-btn" type="button" data-tab="overview">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.8" aria-hidden="true">
+            <rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8"
+            height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/>
+            <rect x="13" y="13" width="8" height="8" rx="2"/></svg>
+        <span>Overview</span>
+    </button>
+    <button class="tab-btn" type="button" data-tab="skeleton">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="5" r="2.6"/><path d="M12 8v6M12 10l-5 2M12 10l5 2"/>
+            <path d="M12 14l-3.5 6M12 14l3.5 6"/></svg>
+        <span>Skeleton</span>
+    </button>
+    <button class="tab-btn" type="button" data-tab="calibration">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="7"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>
+            <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>
+        <span>Calibration</span>
+    </button>
+    <button class="tab-btn" type="button" data-tab="events">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <path d="M4 6h13M4 12h16M4 18h10"/>
+            <circle cx="20" cy="6" r="1.6" fill="currentColor" stroke="none"/></svg>
+        <span>Events</span>
+    </button>
+    <button class="tab-btn" type="button" data-tab="tutorial">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+            aria-hidden="true">
+            <path d="M12 4L2 9l10 5 10-5-10-5z"/><path d="M6 11.5V16c0 1.5 2.7 3 6 3s6-1.5
+            6-3v-4.5"/></svg>
+        <span>Tutorial</span>
+    </button>
+</nav>
+
+<!-- ================= content ================= -->
+<main class="content" id="content">
+
+<!-- ===== Overview ===== -->
+<section id="panel-overview" class="panel" aria-label="Overview">
+    <div class="grid">
+        <div class="card span12 rise" style="--d:120ms">
+            <div class="hero-grid">
+                <div class="metric">
+                    <div class="overline">Fused</div>
+                    <div class="hero-num"><span id="m-fused">--</span><span
+                        class="unit">%</span></div>
+                    <div class="sub num" id="m-fused-sub">of ticks</div>
+                </div>
+                <div class="metric">
+                    <div class="overline">Tick rate</div>
+                    <div class="hero-num"><span id="m-tick">--</span><span
+                        class="unit">Hz</span></div>
+                    <div class="sub num" id="m-tick-sub">target --</div>
+                </div>
+                <div class="metric">
+                    <div class="overline">Frames in</div>
+                    <div class="hero-num" id="m-frames">--</div>
+                    <div class="sub">all sensors, cumulative</div>
+                </div>
+                <div class="metric">
+                    <div class="overline">Trackers out</div>
+                    <div class="hero-num" id="m-trackers">--</div>
+                    <div class="sub">poses sent to endpoints</div>
+                </div>
+            </div>
+            <div class="hero-foot">
+                <span class="chip" id="m-pipe">pipeline --</span>
+                <span class="sub num" id="m-uptime"></span>
+            </div>
+        </div>
+
+        <div class="card span7 rise" style="--d:180ms">
+            <h2 class="overline">Sensors</h2>
+            <div class="nodes-grid" id="nodes-grid"></div>
+            <div class="empty-note" id="nodes-empty">No capture nodes configured.</div>
+        </div>
+
+        <div class="card span5 rise" style="--d:240ms">
+            <h2 class="overline">Calibration</h2>
+            <div class="kv"><span class="k">Pair extrinsics</span>
+                <span class="num" id="cal-ext">--</span></div>
+            <div class="kv"><span class="k">Body model</span>
+                <span class="chip" id="cal-body">--</span></div>
+            <div class="kv"><span class="k">Playspace anchor</span>
+                <span class="chip" id="cal-anchor">--</span></div>
+            <div class="kv"><span class="k">File</span>
+                <span class="num" id="cal-file">--</span></div>
+            <div class="wiz-actions">
+                <button class="btn btn-ghost" type="button" data-go="calibration">
+                    Open calibration</button>
+            </div>
+        </div>
+
+        <div class="card span7 rise" style="--d:300ms">
+            <h2 class="overline">Endpoints</h2>
+            <div class="ep-grid" id="ep-grid"></div>
+            <div class="empty-note" id="ep-empty">No endpoints configured.</div>
+        </div>
+
+        <div class="card span5 rise" style="--d:360ms">
+            <h2 class="overline">Event counts</h2>
+            <div class="kv"><span class="k">Debug</span>
+                <span class="num" id="ec-debug">0</span></div>
+            <div class="kv"><span class="k">Info</span>
+                <span class="num" id="ec-info">0</span></div>
+            <div class="kv"><span class="k">Warnings</span>
+                <span class="chip" id="ec-warn">0</span></div>
+            <div class="kv"><span class="k">Errors</span>
+                <span class="chip" id="ec-error">0</span></div>
+            <div class="wiz-actions">
+                <button class="btn btn-ghost" type="button" data-go="events">
+                    Open events</button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== Skeleton ===== -->
+<section id="panel-skeleton" class="panel" aria-label="Skeleton" hidden>
+    <div class="card skel-card">
+        <div class="skel-head">
+            <h2 class="overline" style="margin:0">Live skeleton</h2>
+            <span class="sub num" id="skel-meta"></span>
+        </div>
+        <div class="skel-wrap">
+            <canvas id="skel-canvas"></canvas>
+            <span class="view-tag left">FRONT &#183; X / Y</span>
+            <span class="view-tag right">TOP &#183; X / Z</span>
+            <div class="nobody" id="skel-nobody">
+                <div class="nobody-card">
+                    <strong>No body in view</strong>
+                    Step into the sensors' overlap region to be tracked.
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ===== Calibration ===== -->
+<section id="panel-calibration" class="panel" aria-label="Calibration" hidden>
+    <div class="grid">
+        <div class="card span12 calib-head">
+            <h2 class="overline">Calibration jobs</h2>
+            <span id="calib-state">Idle. One job runs at a time.</span>
+            <button class="btn btn-danger" type="button" id="calib-cancel" hidden>
+                Cancel job</button>
+        </div>
+
+        <div class="card span4 wizard" id="wiz-pair">
+            <h2 class="card-title">Pair alignment</h2>
+            <p class="desc">Aligns a target sensor to the reference. Stand where both
+                sensors see you and move your limbs slowly.</p>
+            <label class="field" for="pair-ref">Reference sensor</label>
+            <select id="pair-ref"></select>
+            <label class="field" for="pair-target">Target sensor</label>
+            <select id="pair-target"></select>
+            <div class="wiz-phase" id="pair-phase"></div>
+            <div class="bar"><div class="bar-fill" id="pair-bar"></div></div>
+            <div class="rmse-block" id="pair-rmse-block" hidden>
+                <span class="rmse-num"><span id="pair-rmse">--</span><span
+                    class="unit">cm</span></span>
+                <span class="chip" id="pair-verdict">--</span>
+                <span class="rmse-advice" id="pair-advice"></span>
+            </div>
+            <p class="wiz-msg" id="pair-msg"></p>
+            <div class="wiz-actions">
+                <button class="btn btn-primary" type="button" id="pair-start">
+                    Start pair calibration</button>
+            </div>
+            <p class="hint" id="pair-hint" hidden>Needs at least two sensors.</p>
+        </div>
+
+        <div class="card span4 wizard" id="wiz-body">
+            <h2 class="card-title">Body model</h2>
+            <p class="desc">Measures your bone lengths. Stand in view, arms slightly out,
+                and move gently for the capture.</p>
+            <label class="field" for="body-seconds">Capture seconds</label>
+            <input type="number" id="body-seconds" min="5" max="120" step="1" value="15">
+            <div class="wiz-phase" id="body-phase"></div>
+            <div class="bar"><div class="bar-fill" id="body-bar"></div></div>
+            <p class="wiz-msg" id="body-msg"></p>
+            <div class="wiz-actions">
+                <button class="btn btn-primary" type="button" id="body-start">
+                    Run body capture</button>
+            </div>
+        </div>
+
+        <div class="card span4 wizard" id="wiz-playspace">
+            <h2 class="card-title">Playspace anchor</h2>
+            <p class="desc">Aligns Marionette with the SteamVR playspace. Hold a tracked
+                controller and move it through wide, slow arcs.</p>
+            <label class="field" id="hand-label">Controller hand</label>
+            <div class="seg" role="group" aria-labelledby="hand-label">
+                <button class="seg-btn" type="button" data-hand="left"
+                    aria-pressed="false">Left</button>
+                <button class="seg-btn" type="button" data-hand="right"
+                    aria-pressed="true">Right</button>
+            </div>
+            <div class="wiz-phase" id="ps-phase"></div>
+            <div class="bar"><div class="bar-fill" id="ps-bar"></div></div>
+            <p class="wiz-msg" id="ps-msg"></p>
+            <div class="wiz-actions">
+                <button class="btn btn-primary" type="button" id="ps-start">
+                    Run playspace calibration</button>
+            </div>
+            <p class="hint" id="ps-hint" hidden>Requires the SteamVR client build plus
+                SteamVR running.</p>
+        </div>
+    </div>
+</section>
+
+<!-- ===== Events ===== -->
+<section id="panel-events" class="panel" aria-label="Events" hidden>
+    <div class="card ev-card">
+        <div class="ev-head">
+            <h2 class="overline">Events</h2>
+            <button class="pill-btn" type="button" data-level="debug" aria-pressed="true">
+                debug<span class="cnt" id="pc-debug">0</span></button>
+            <button class="pill-btn" type="button" data-level="info" aria-pressed="true">
+                info<span class="cnt" id="pc-info">0</span></button>
+            <button class="pill-btn p-warn" type="button" data-level="warn"
+                aria-pressed="true">warn<span class="cnt" id="pc-warn">0</span></button>
+            <button class="pill-btn p-error" type="button" data-level="error"
+                aria-pressed="true">error<span class="cnt" id="pc-error">0</span></button>
+            <button class="pill-btn follow-btn" type="button" id="ev-follow"
+                aria-pressed="true">auto-follow</button>
+        </div>
+        <div class="ev-list" id="ev-list" role="log" aria-label="Event log"></div>
+        <div class="empty-note" id="ev-empty">No events yet.</div>
+    </div>
+</section>
+
+<!-- ===== Tutorial ===== -->
+<section id="panel-tutorial" class="panel" aria-label="Tutorial" hidden>
+    <div class="card welcome-banner" id="tut-welcome" hidden>
+        <div class="grow">
+            <h2 class="card-title">Welcome to Marionette</h2>
+            <p>First time here? This short tour takes you from sensor placement to
+                trackers on your body. Your progress is saved.</p>
+        </div>
+        <button class="btn btn-ghost" type="button" id="tut-dismiss">Dismiss</button>
+    </div>
+
+    <div class="tut-wrap">
+        <nav class="stepper glass" id="tut-stepper" aria-label="Tutorial steps">
+            <button class="step-btn" type="button" data-step="1">
+                <span class="step-ix">1</span><span>Welcome</span></button>
+            <button class="step-btn" type="button" data-step="2">
+                <span class="step-ix">2</span><span>Choose your path</span></button>
+            <button class="step-btn" type="button" data-step="3">
+                <span class="step-ix">3</span><span>Place your sensors</span></button>
+            <button class="step-btn" type="button" data-step="4">
+                <span class="step-ix">4</span><span>See yourself</span></button>
+            <button class="step-btn" type="button" data-step="5">
+                <span class="step-ix">5</span><span>Calibrate</span></button>
+            <button class="step-btn" type="button" data-step="6">
+                <span class="step-ix">6</span><span>Connect headset</span></button>
+            <button class="step-btn" type="button" data-step="7">
+                <span class="step-ix">7</span><span>Done</span></button>
+        </nav>
+
+        <div class="card tut-card">
+
+            <div class="tut-page" data-step="1">
+                <h2>Welcome to Marionette</h2>
+                <p class="tut-lede">Marionette turns one or more Kinect sensors into
+                    full-body tracking for VR. Each sensor watches you from a different
+                    angle; the fusion engine merges every view into one stable skeleton
+                    and streams tracker poses to SteamVR or straight to a Quest headset
+                    over Wi-Fi.</p>
+                <svg class="flow-svg" viewBox="0 0 640 230" role="img"
+                    aria-label="Dataflow diagram: sensors feed fusion, fusion feeds
+                    SteamVR and Quest">
+                    <g class="flow-box"><rect x="14" y="34" width="120" height="52"
+                        rx="12"/><text x="74" y="57">Kinect A</text>
+                        <text class="s" x="74" y="74">capture thread</text></g>
+                    <g class="flow-box"><rect x="14" y="142" width="120" height="52"
+                        rx="12"/><text x="74" y="165">Kinect B</text>
+                        <text class="s" x="74" y="182">capture thread</text></g>
+                    <path class="flow" d="M134 60 C 192 60, 198 100, 250 106"/>
+                    <path class="flow" d="M134 168 C 192 168, 198 128, 250 122"/>
+                    <g class="flow-box hub"><rect x="250" y="88" width="130" height="52"
+                        rx="12"/><text x="315" y="111">Fusion</text>
+                        <text class="s" x="315" y="128">one world skeleton</text></g>
+                    <path class="flow" d="M380 106 C 438 100, 444 60, 500 60"/>
+                    <path class="flow" d="M380 122 C 438 128, 444 168, 500 168"/>
+                    <g class="flow-box"><rect x="500" y="34" width="126" height="52"
+                        rx="12"/><text x="563" y="57">SteamVR</text>
+                        <text class="s" x="563" y="74">driver trackers</text></g>
+                    <g class="flow-box"><rect x="500" y="142" width="126" height="52"
+                        rx="12"/><text x="563" y="165">Quest</text>
+                        <text class="s" x="563" y="182">VRChat OSC</text></g>
+                </svg>
+                <p class="tut-note">Opposed viewpoints structurally remove the two classic
+                    single-Kinect failures: front/back flips and self-occlusion
+                    dropouts.</p>
+            </div>
+
+            <div class="tut-page" data-step="2" hidden>
+                <h2>Choose your path</h2>
+                <p class="tut-lede">Two ways to get trackers into your game. You can run
+                    both endpoints at once, but pick one to set up first.</p>
+                <div class="path-cards">
+                    <div class="tile path-card">
+                        <div class="path-head"><h3>Quest standalone</h3>
+                            <span class="chip chip-ok">simplest</span></div>
+                        <ul>
+                            <li>VRChat OSC over Wi-Fi - no PCVR stream needed</li>
+                            <li>No SteamVR, no driver, no playspace calibration</li>
+                            <li>The PC only runs Marionette and the Kinects</li>
+                            <li>Up to 8 trackers; start with 3-point</li>
+                        </ul>
+                    </div>
+                    <div class="tile path-card">
+                        <div class="path-head"><h3>PCVR (SteamVR)</h3>
+                            <span class="chip">most compatible</span></div>
+                        <ul>
+                            <li>Works in any OpenVR app via ALVR, Virtual Desktop,
+                                Link, or a wired headset</li>
+                            <li>Trackers appear as real SteamVR devices (MN-*)</li>
+                            <li>Needs a one-time driver install and a playspace
+                                anchor calibration</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tut-page" data-step="3" hidden>
+                <h2>Place your sensors</h2>
+                <p class="tut-lede">Mount sensors at head height (1.6-2.0 m), tilted
+                    slightly down, with the play-area center 2-3.5 m away. Depth noise
+                    grows with range - past about 4 m a sensor contributes little.</p>
+                <div class="seg" role="group" aria-label="Sensor count" id="room-seg">
+                    <button class="seg-btn" type="button" data-count="1"
+                        aria-pressed="false">1 sensor</button>
+                    <button class="seg-btn" type="button" data-count="2"
+                        aria-pressed="true">2 sensors</button>
+                    <button class="seg-btn" type="button" data-count="3"
+                        aria-pressed="false">3 sensors</button>
+                </div>
+                <svg class="room-svg" id="room-svg" viewBox="0 0 360 250" role="img"
+                    aria-label="Top-down room diagram with recommended sensor placement">
+                    <rect class="room-wall" x="18" y="14" width="324" height="222"
+                        rx="14"/>
+                    <circle class="room-area" cx="180" cy="125" r="58"/>
+                    <g class="room-person">
+                        <circle cx="180" cy="125" r="9"/>
+                        <line x1="180" y1="125" x2="180" y2="141"/>
+                    </g>
+                    <g class="room-sen" id="room-sen-front">
+                        <path d="M180 230 L152 188 L208 188 Z"/>
+                        <rect x="174" y="226" width="12" height="8" rx="2"/>
+                        <text x="196" y="246">front</text>
+                    </g>
+                    <g class="room-sen" id="room-sen-back">
+                        <path d="M180 20 L152 62 L208 62 Z"/>
+                        <rect x="174" y="16" width="12" height="8" rx="2"/>
+                        <text x="196" y="14">back</text>
+                    </g>
+                    <g class="room-sen" id="room-sen-side">
+                        <path d="M336 125 L294 97 L294 153 Z"/>
+                        <rect x="332" y="119" width="8" height="12" rx="2"/>
+                        <text x="304" y="172">side</text>
+                    </g>
+                </svg>
+                <p class="room-note" id="room-note"></p>
+                <ul class="rules">
+                    <li><strong>One Kinect v2 per PC</strong> - a hard SDK limit
+                        (multiple v1s can share a PC).</li>
+                    <li><strong>Never overlap two Kinect v1s</strong> - their projected
+                        IR dot patterns interfere badly. A v1 + v2 mix is clean, as is
+                        v2 + v2.</li>
+                    <li><strong>One USB3 controller per v2</strong> when planning
+                        multi-v2 rigs - separate PCIe USB3 cards, not one card's
+                        ports.</li>
+                    <li>Mount rigidly: a bumped tripod means redoing pair calibration
+                        for that sensor.</li>
+                </ul>
+            </div>
+
+            <div class="tut-page" data-step="4" hidden>
+                <h2>See yourself</h2>
+                <p class="tut-lede">Open the Skeleton tab to watch the live fused body:
+                    front and top-down views, sensor positions, and the tracker
+                    diamonds being streamed out. If the skeleton is solid while you
+                    turn in place, the rig is healthy.</p>
+                <div class="wiz-actions">
+                    <button class="btn btn-primary" type="button" data-go="skeleton">
+                        Open the Skeleton tab</button>
+                </div>
+                <p class="tut-note">No hardware yet? Run
+                    <code>marionette run -c config/demo.json</code> - two synthetic
+                    sensors through the real fusion pipeline. A zero-hardware dry run
+                    of everything on this dashboard.</p>
+            </div>
+
+            <div class="tut-page" data-step="5" hidden>
+                <h2>Calibrate - in this order</h2>
+                <ol class="cal-steps">
+                    <li><strong>Pair alignment</strong>
+                        <span class="chip" id="tut-pair-chip">multi-sensor rigs</span> -
+                        aligns each extra sensor to the reference. Stand in the overlap
+                        and move your limbs slowly; accept under 2-3 cm RMSE.</li>
+                    <li><strong>Body model</strong> - a 15-30 s capture of your bone
+                        lengths. Redo it per person, not per session.</li>
+                    <li><strong>Playspace anchor</strong>
+                        <span class="chip">PCVR only</span> - aligns Marionette's world
+                        with the SteamVR playspace using a tracked controller. The OSC
+                        path never needs it.</li>
+                </ol>
+                <div class="wiz-actions">
+                    <button class="btn btn-primary" type="button" data-go="calibration">
+                        Open the Calibration tab</button>
+                </div>
+            </div>
+
+            <div class="tut-page" data-step="6" hidden>
+                <h2>Connect your headset</h2>
+                <div class="path-cards">
+                    <div class="tile path-card">
+                        <div class="path-head"><h3>Quest - VRChat OSC</h3></div>
+                        <ol>
+                            <li>Find the headset IP: Settings &gt; Wi-Fi &gt; your
+                                network &gt; details. A static DHCP lease helps.</li>
+                            <li>Point the <code>osc</code> endpoint at it: host = the
+                                headset IP, port <span class="num">9000</span>.</li>
+                            <li>In VRChat: Action Menu &gt; Options &gt; OSC &gt;
+                                Enabled.</li>
+                            <li>Run Marionette, then run VRChat's FBT calibration
+                                (stand straight, arms out, confirm).</li>
+                        </ol>
+                    </div>
+                    <div class="tile path-card">
+                        <div class="path-head"><h3>SteamVR</h3>
+                            <span class="chip chip-warn" id="ovr-tag" hidden>not built
+                                in this binary</span></div>
+                        <ol>
+                            <li>Register the driver once with
+                                <code>scripts/install-driver.ps1</code> (or
+                                <code>.sh</code>).</li>
+                            <li>Add the <code>openvr</code> endpoint
+                                (127.0.0.1:24190) to your config.</li>
+                            <li>Start SteamVR via ALVR / Virtual Desktop / Link, then
+                                run Marionette. Trackers appear as MN-WAIST, MN-LFOOT,
+                                and so on.</li>
+                            <li>Assign roles: SteamVR &gt; Settings &gt; Controllers
+                                &gt; Manage Trackers. SteamVR remembers per serial.</li>
+                            <li>Quest 2: lower the video bitrate in ALVR / Virtual
+                                Desktop. Tracker data is tiny - the video stream is
+                                what competes for bandwidth.</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tut-page" data-step="7" hidden>
+                <h2>You are set</h2>
+                <p class="tut-lede">Trackers should now sit on your body and stay there.
+                    Recalibrate only when something changes:</p>
+                <ul class="rules">
+                    <li>Sensor moved, bumped, or remounted -&gt; redo
+                        <strong>Pair</strong> for that sensor.</li>
+                    <li>Different person using the rig -&gt; redo the
+                        <strong>Body model</strong>.</li>
+                    <li>SteamVR room setup, playspace recenter, or a different
+                        streaming app -&gt; redo the <strong>Playspace anchor</strong>.
+                        Re-running it at session start is cheap insurance.</li>
+                    <li>Trackers drift or sit offset -&gt; anchor first; if turning in
+                        place doubles your limbs, redo Pair.</li>
+                </ul>
+                <p class="tut-lede">Watch the <strong>Events</strong> tab - warnings
+                    surface there first. The full reference lives in the repo's docs
+                    folder: USAGE.md and CALIBRATION.md.</p>
+                <div class="wiz-actions">
+                    <button class="btn btn-ghost" type="button" data-go="events">
+                        Open events</button>
+                    <button class="btn btn-primary" type="button" id="tut-finish">
+                        Finish tutorial</button>
+                </div>
+            </div>
+
+            <div class="tut-nav">
+                <button class="btn btn-ghost" type="button" id="tut-back">Back</button>
+                <span class="tut-progress" id="tut-progress">Step 1 of 7</span>
+                <button class="btn btn-primary" type="button" id="tut-next">Next</button>
+            </div>
+        </div>
+    </div>
+</section>
+
+</main>
+</div>
+
+<!-- ================= disconnected veil ================= -->
+<div class="veil" id="veil" hidden role="alertdialog" aria-modal="true"
+    aria-label="Connection lost">
+    <div class="veil-card glass">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#fb7185"
+            stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+            <path d="M2 8.5c2.8-2.5 6.2-4 10-4 1.4 0 2.8.2 4.1.6M19.4 6.7
+                c.9.5 1.8 1.1 2.6 1.8"/>
+            <path d="M5.5 12c1.8-1.6 4-2.5 6.5-2.5.7 0 1.4.07 2 .2"/>
+            <path d="M9 15.5c.9-.8 2-1.2 3-1.2"/>
+            <circle cx="12" cy="19" r="1" fill="#fb7185" stroke="none"/>
+            <path d="M4 4l16 16" stroke="#fb7185"/>
+        </svg>
+        <h2>Connection lost</h2>
+        <p>Marionette is not answering. Retrying in
+            <span class="num" id="veil-count">5</span> s.</p>
+        <button class="btn btn-ghost" type="button" id="veil-retry">Retry now</button>
+    </div>
+</div>
+
+<script>
+"use strict";
+/* ================================================================================
+   Sections: helpers / icons / state / fetch / status poll / overview / skeleton /
+   calibration / events / tutorial / navigation / boot
+   ================================================================================ */
+
+/* ---------------- helpers ---------------- */
+var REDUCED = false;
+try { REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches; }
+catch (e) { /* ignore */ }
+
+function $(id) { return document.getElementById(id); }
+
+function el(tag, attrs) {
+    var node = document.createElement(tag);
+    if (attrs) {
+        for (var k in attrs) {
+            var v = attrs[k];
+            if (v === null || v === undefined) continue;
+            if (k === "class") node.className = v;
+            else node.setAttribute(k, v);
+        }
+    }
+    for (var i = 2; i < arguments.length; i++) {
+        var c = arguments[i];
+        if (c === null || c === undefined) continue;
+        node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    }
+    return node;
+}
+
+function fmtInt(v) {
+    if (typeof v !== "number" || !isFinite(v)) return "--";
+    return Math.round(v).toLocaleString("en-US");
+}
+function fmt1(v) {
+    if (typeof v !== "number" || !isFinite(v)) return "--";
+    return (Math.round(v * 10) / 10).toFixed(1);
+}
+function fmtAge(s) {
+    if (typeof s !== "number" || !isFinite(s) || s < 0) return "--";
+    return s < 1 ? Math.round(s * 1000) + " ms" : fmt1(s) + " s";
+}
+function fmtUp(s) {
+    if (typeof s !== "number" || !isFinite(s)) return "";
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+    if (h > 0) return h + "h " + m + "m";
+    if (m > 0) return m + "m " + sec + "s";
+    return sec + "s";
+}
+function fmtClock(t) {
+    if (typeof t !== "number" || !isFinite(t)) return "--:--";
+    var h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+    var mm = (m < 10 ? "0" : "") + m;
+    var ss = s.toFixed(1);
+    if (s < 10) ss = "0" + ss;
+    return (h > 0 ? h + ":" + mm : mm) + ":" + ss;
+}
+
+/* Tweened numeric text. fmt maps the interpolated value to display text. */
+function setNum(node, value, fmt) {
+    if (typeof value !== "number" || !isFinite(value)) { node.textContent = "--"; return; }
+    var from = (typeof node._val === "number") ? node._val : value;
+    node._val = value;
+    if (REDUCED || from === value) { node.textContent = fmt(value); return; }
+    if (node._raf) cancelAnimationFrame(node._raf);
+    var t0 = performance.now(), dur = 420;
+    function step(now) {
+        var k = Math.min(1, (now - t0) / dur);
+        var e = 1 - Math.pow(1 - k, 3);
+        node.textContent = fmt(from + (value - from) * e);
+        if (k < 1) node._raf = requestAnimationFrame(step);
+        else node._raf = 0;
+    }
+    node._raf = requestAnimationFrame(step);
+}
+
+function lsGet(key) {
+    try { return window.localStorage.getItem(key); } catch (e) { return null; }
+}
+function lsSet(key, val) {
+    try { window.localStorage.setItem(key, val); } catch (e) { /* ignore */ }
+}
+
+/* ---------------- icons (static strings only - never API data) ---------------- */
+function nodeIcon(type) {
+    var s = 'width="19" height="19" viewBox="0 0 24 24" fill="none" ' +
+        'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" ' +
+        'aria-hidden="true"';
+    if (type === "kinect_v2" || type === "kinect_v1") {
+        return '<svg ' + s + '><rect x="2.5" y="8" width="19" height="8" rx="2.5"/>' +
+            '<circle cx="8" cy="12" r="2"/>' +
+            (type === "kinect_v2" ? '<circle cx="14" cy="12" r="1.2"/>' : "") +
+            '<circle cx="18" cy="12" r="0.6" fill="currentColor" stroke="none"/></svg>';
+    }
+    if (type === "replay") {
+        return '<svg ' + s + '><circle cx="12" cy="12" r="8.5"/>' +
+            '<path d="M10 8.8v6.4l5.4-3.2z" fill="currentColor" stroke="none"/></svg>';
+    }
+    if (type === "mock") {
+        return '<svg ' + s + '><path d="M9.5 3.5h5M11 3.5v5L5.8 18a2 2 0 0 0 1.8 3h8.8' +
+            'a2 2 0 0 0 1.8-3L13 8.5v-5"/><path d="M8 15h8"/></svg>';
+    }
+    return '<svg ' + s + '><circle cx="12" cy="12" r="8.5"/>' +
+        '<path d="M12 8v4l3 2"/></svg>';
+}
+function epIcon(type) {
+    var s = 'width="19" height="19" viewBox="0 0 24 24" fill="none" ' +
+        'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" ' +
+        'aria-hidden="true"';
+    if (type === "openvr") {
+        return '<svg ' + s + '><path d="M3 9a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v4a3 3 0 0 1' +
+            '-3 3h-3l-1.6-2h-2.8L9 16H6a3 3 0 0 1-3-3z"/>' +
+            '<circle cx="8.5" cy="11" r="1" fill="currentColor" stroke="none"/>' +
+            '<circle cx="15.5" cy="11" r="1" fill="currentColor" stroke="none"/></svg>';
+    }
+    return '<svg ' + s + '><path d="M4 18a13 13 0 0 1 13-13M4 13a8 8 0 0 1 8-8" ' +
+        'opacity="0.55"/><path d="M4 8a3 3 0 0 1 3-3"/>' +
+        '<circle cx="5" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg>';
+}
+function epDesc(type) {
+    if (type === "osc") return "VRChat OSC trackers over UDP";
+    if (type === "openvr") return "SteamVR driver bridge (UDP wire)";
+    return "custom endpoint";
+}
+
+/* ---------------- state ---------------- */
+var state = {
+    tab: "overview",
+    down: false,
+    failures: 0,
+    retryIn: 0,
+    status: null,
+    prevPipe: null,        /* { ticks, uptime } for measured tick rate */
+    nodeIds: [],
+    skel: null,
+    lastSeq: 0,
+    counts: { debug: 0, info: 0, warn: 0, error: 0 },
+    show: { debug: true, info: true, warn: true, error: true },
+    follow: true,
+    calibActive: false,
+    calibKind: "",
+    hand: "right",
+    tutStep: 1
+};
+var LEVELS = ["debug", "info", "warn", "error"];
+
+/* ---------------- fetch with timeout; never throws past callers' catch ----- */
+function fetchJSON(url, opts, timeoutMs) {
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, timeoutMs || 4000);
+    var o = Object.assign({ signal: ctl.signal, cache: "no-store" }, opts || {});
+    return fetch(url, o)
+        .then(function (res) {
+            return res.json().then(function (body) {
+                return { http: res.status, body: body };
+            });
+        })
+        .finally(function () { clearTimeout(timer); });
+}
+function postJSON(url, payload) {
+    return fetchJSON(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+    });
+}
+
+/* ---------------- connection pill + veil ---------------- */
+function setPill(mode) {
+    var dot = $("conn-dot"), txt = $("conn-text");
+    dot.className = "dot" + (mode === "live" ? " live" : mode === "dead" ? " dead" : "");
+    txt.textContent = mode === "live" ? "Live" : mode === "dead" ? "Offline" : "Connecting";
+}
+function showVeil() { $("veil").hidden = false; }
+function hideVeil() { $("veil").hidden = true; }
+
+/* ---------------- status poll (1 Hz) ---------------- */
+function statusLoop() {
+    if (state.down && state.retryIn > 0) {
+        state.retryIn -= 1;
+        $("veil-count").textContent = String(state.retryIn + 1);
+        setTimeout(statusLoop, 1000);
+        return;
+    }
+    fetchJSON("/api/status").then(function (r) {
+        state.failures = 0;
+        if (state.down) { state.down = false; hideVeil(); }
+        setPill("live");
+        try { applyStatus(r.body); } catch (e) { /* never break the loop */ }
+    }).catch(function () {
+        state.failures += 1;
+        setPill("dead");
+        if (state.failures > 3) {
+            if (!state.down) { state.down = true; showVeil(); }
+            state.retryIn = 4;
+            $("veil-count").textContent = "5";
+        }
+    }).finally(function () {
+        setTimeout(statusLoop, 1000);
+    });
+}
+
+/* ---------------- overview rendering ---------------- */
+var nodeCards = {};   /* id -> element refs */
+var epSig = "";
+
+function applyStatus(s) {
+    if (!s || typeof s !== "object") return;
+    state.status = s;
+    var app = s.app || {}, pipe = s.pipeline || {};
+
+    $("app-version").textContent = app.version ? "v" + String(app.version) : "";
+
+    /* hero metrics */
+    setNum($("m-fused"), Number(pipe.fused_pct), fmt1);
+    $("m-fused-sub").textContent =
+        fmtInt(Number(pipe.fused_ticks)) + " / " + fmtInt(Number(pipe.ticks)) + " ticks";
+    var rate = NaN;
+    if (state.prevPipe && typeof pipe.ticks === "number" &&
+        typeof app.uptime_s === "number") {
+        var dt = app.uptime_s - state.prevPipe.uptime;
+        var dticks = pipe.ticks - state.prevPipe.ticks;
+        if (dt > 0.2 && dticks >= 0) rate = dticks / dt;
+    }
+    if (!isFinite(rate)) rate = Number(app.tick_hz);
+    setNum($("m-tick"), rate, fmt1);
+    $("m-tick-sub").textContent = "target " + fmt1(Number(app.tick_hz)) + " Hz";
+    state.prevPipe = { ticks: Number(pipe.ticks), uptime: Number(app.uptime_s) };
+    setNum($("m-frames"), Number(pipe.frames_in), fmtInt);
+    setNum($("m-trackers"), Number(pipe.trackers_out), fmtInt);
+
+    var pc = $("m-pipe");
+    pc.textContent = pipe.running ? "pipeline running" : "pipeline stopped";
+    pc.className = "chip " + (pipe.running ? "chip-ok" : "chip-warn");
+    $("m-uptime").textContent = app.uptime_s != null ? "up " + fmtUp(app.uptime_s) : "";
+
+    renderNodes(Array.isArray(s.nodes) ? s.nodes : []);
+    renderEndpoints(Array.isArray(s.endpoints) ? s.endpoints : []);
+    renderCalSummary(s.calibration || {});
+    if (s.events && typeof s.events === "object") {
+        updateCounts({
+            debug: state.counts.debug, info: state.counts.info,
+            warn: Number(s.events.warn) || 0, error: Number(s.events.error) || 0
+        });
+    }
+    updatePairSelects(Array.isArray(s.nodes) ? s.nodes : []);
+
+    /* tutorial tailoring from capabilities */
+    var caps = app.capabilities || {};
+    $("ovr-tag").hidden = caps.openvr_client !== false;
+}
+
+function buildNodeCard(n) {
+    var refs = {};
+    refs.icon = el("div", { class: "node-icon" });
+    refs.icon.innerHTML = nodeIcon(String(n.type));
+    refs.run = el("span", { class: "run-dot" });
+    refs.fps = el("span", { class: "v num" }, "--");
+    refs.age = el("span", { class: "v num" }, "--");
+    refs.body = el("span", { class: "chip" }, "--");
+    refs.restarts = el("span", { class: "chip num" }, "0 restarts");
+    refs.err = el("div", { class: "nc-err" });
+    refs.root = el("div", { class: "tile node-card" },
+        el("div", { class: "nc-head" },
+            refs.icon,
+            el("div", null,
+                el("div", { class: "nc-id" }, String(n.id)),
+                el("div", { class: "nc-type" }, String(n.type))),
+            refs.run),
+        el("div", { class: "nc-stats" },
+            el("div", { class: "nc-stat" }, refs.fps,
+                el("div", { class: "k" }, "fps")),
+            el("div", { class: "nc-stat" }, refs.age,
+                el("div", { class: "k" }, "frame age"))),
+        el("div", { class: "nc-chips" }, refs.body, refs.restarts),
+        refs.err);
+    return refs;
+}
+
+function renderNodes(nodes) {
+    var grid = $("nodes-grid"), seen = {};
+    for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        var id = String(n.id);
+        seen[id] = true;
+        var c = nodeCards[id];
+        if (!c) { c = buildNodeCard(n); nodeCards[id] = c; grid.appendChild(c.root); }
+        c.run.className = "run-dot " + (n.running ? "on" : "off");
+        c.run.title = n.running ? "running" : "stopped";
+        c.fps.textContent = fmt1(Number(n.fps));
+        c.age.textContent = fmtAge(Number(n.last_frame_age_s));
+        var hb = !!n.has_body;
+        c.body.textContent = hb ? "body" : "no body";
+        c.body.className = "chip " + (hb ? "chip-ok" : "");
+        var rs = Number(n.restarts) || 0;
+        c.restarts.textContent = fmtInt(rs) + (rs === 1 ? " restart" : " restarts");
+        c.restarts.className = "chip num " + (rs > 0 ? "chip-warn" : "");
+        var errText = n.last_error ? String(n.last_error) : "";
+        c.err.textContent = errText;
+        c.err.hidden = errText === "";
+    }
+    for (var id2 in nodeCards) {
+        if (!seen[id2]) { nodeCards[id2].root.remove(); delete nodeCards[id2]; }
+    }
+    $("nodes-empty").hidden = nodes.length > 0;
+}
+
+function renderEndpoints(eps) {
+    var sig = JSON.stringify(eps);
+    if (sig === epSig) return;
+    epSig = sig;
+    var grid = $("ep-grid");
+    grid.textContent = "";
+    for (var i = 0; i < eps.length; i++) {
+        var t = String(eps[i].type);
+        var icon = el("div", { class: "node-icon" });
+        icon.innerHTML = epIcon(t);
+        grid.appendChild(el("div", { class: "tile ep-card" },
+            icon,
+            el("div", null,
+                el("div", { class: "nc-id" }, t),
+                el("div", { class: "sub" }, epDesc(t)))));
+    }
+    $("ep-empty").hidden = eps.length > 0;
+}
+
+function renderCalSummary(cal) {
+    var ext = Array.isArray(cal.extrinsics) ? cal.extrinsics.length : 0;
+    $("cal-ext").textContent = String(ext) + (ext === 1 ? " sensor" : " sensors");
+    var b = $("cal-body");
+    b.textContent = cal.body_model_valid ? "calibrated" : "not set";
+    b.className = "chip " + (cal.body_model_valid ? "chip-ok" : "");
+    var a = $("cal-anchor");
+    a.textContent = cal.world_anchor_set ? "set" : "not set";
+    a.className = "chip " + (cal.world_anchor_set ? "chip-ok" : "");
+    $("cal-file").textContent = cal.file ? String(cal.file) : "--";
+}
+
+/* ---------------- skeleton view ---------------- */
+var skelRaf = 0;
+var cam = { sF: 130, fx: 0, fy: 0.95, sT: 90, tx: 0, tz: 0, init: false };
+
+function skelPollLoop() {
+    var want = state.tab === "skeleton" && !document.hidden && !state.down;
+    if (!want) { setTimeout(skelPollLoop, 200); return; }
+    fetchJSON("/api/skeleton", null, 2000).then(function (r) {
+        if (r.body && typeof r.body === "object") {
+            state.skel = r.body;
+            $("skel-nobody").hidden = !!r.body.has_body;
+            $("skel-meta").textContent = r.body.has_body
+                ? Object.keys(r.body.joints || {}).length + " joints"
+                : "";
+        }
+    }).catch(function () { /* keep last frame */ }).finally(function () {
+        // 30 Hz: matches the Kinect hardware skeleton rate (localhost, ~2 KB).
+        setTimeout(skelPollLoop, 33);
+    });
+}
+
+function startSkelDraw() {
+    if (!skelRaf) skelRaf = requestAnimationFrame(skelFrame);
+}
+function skelFrame() {
+    skelRaf = 0;
+    if (state.tab !== "skeleton") return;
+    try { drawSkeleton(); } catch (e) { /* never break the loop */ }
+    skelRaf = requestAnimationFrame(skelFrame);
+}
+
+function jointPoints(sk) {
+    var pts = [];
+    if (sk && sk.has_body && sk.joints) {
+        for (var name in sk.joints) {
+            var j = sk.joints[name];
+            if (j && j.s > 0 && Array.isArray(j.p) && j.p.length === 3) pts.push(j.p);
+        }
+    }
+    return pts;
+}
+
+function updateCam(sk, vw, vh) {
+    var pts = jointPoints(sk);
+    if (pts.length === 0) pts = [[-0.5, 0, -0.5], [0.5, 1.85, 0.5]];
+    var mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
+    var i, k;
+    for (i = 0; i < pts.length; i++) {
+        for (k = 0; k < 3; k++) {
+            if (pts[i][k] < mn[k]) mn[k] = pts[i][k];
+            if (pts[i][k] > mx[k]) mx[k] = pts[i][k];
+        }
+    }
+    var pad = 0.55;
+    var cFx = (mn[0] + mx[0]) / 2, cFy = (mn[1] + mx[1]) / 2;
+    var sF = Math.min(vw / (mx[0] - mn[0] + 2 * pad), vh / (mx[1] - mn[1] + 2 * pad));
+    sF = Math.max(30, Math.min(380, sF));
+    /* top view: center on body, zoom out to keep sensors and trackers visible */
+    var cTx = (mn[0] + mx[0]) / 2, cTz = (mn[2] + mx[2]) / 2;
+    var hx = Math.max(mx[0] - cTx, cTx - mn[0]), hz = Math.max(mx[2] - cTz, cTz - mn[2]);
+    var extra = [];
+    if (sk && Array.isArray(sk.sensors)) {
+        for (i = 0; i < sk.sensors.length; i++) {
+            if (Array.isArray(sk.sensors[i].pos)) extra.push(sk.sensors[i].pos);
+        }
+    }
+    if (sk && Array.isArray(sk.trackers)) {
+        for (i = 0; i < sk.trackers.length; i++) {
+            if (Array.isArray(sk.trackers[i].pos)) extra.push(sk.trackers[i].pos);
+        }
+    }
+    for (i = 0; i < extra.length; i++) {
+        hx = Math.max(hx, Math.abs(extra[i][0] - cTx));
+        hz = Math.max(hz, Math.abs(extra[i][2] - cTz));
+    }
+    var sT = Math.min(vw / 2 / (hx + pad), vh / 2 / (hz + pad));
+    sT = Math.max(24, Math.min(380, sT));
+    var k2 = (REDUCED || !cam.init) ? 1 : 0.14;
+    cam.fx += (cFx - cam.fx) * k2;
+    cam.fy += (cFy - cam.fy) * k2;
+    cam.sF += (sF - cam.sF) * k2;
+    cam.tx += (cTx - cam.tx) * k2;
+    cam.tz += (cTz - cam.tz) * k2;
+    cam.sT += (sT - cam.sT) * k2;
+    cam.init = true;
+}
+
+function drawSkeleton() {
+    var canvas = $("skel-canvas"), wrap = canvas.parentElement;
+    var dpr = window.devicePixelRatio || 1;
+    var w = wrap.clientWidth, h = wrap.clientHeight;
+    if (w < 10 || h < 10) return;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+    }
+    var ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    var gap = 14, vw = (w - gap) / 2;
+    updateCam(state.skel, vw - 20, h - 20);
+    drawView(ctx, { x: 0, y: 0, w: vw, h: h }, "front");
+    drawView(ctx, { x: vw + gap, y: 0, w: vw, h: h }, "top");
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+}
+
+function drawView(ctx, rect, kind) {
+    var sk = state.skel;
+    var cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
+    var map;
+    if (kind === "front") {
+        map = function (p) {
+            return [cx + (p[0] - cam.fx) * cam.sF, cy - (p[1] - cam.fy) * cam.sF];
+        };
+    } else {
+        map = function (p) {
+            return [cx + (p[0] - cam.tx) * cam.sT, cy + (p[2] - cam.tz) * cam.sT];
+        };
+    }
+    ctx.save();
+    roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 14);
+    ctx.clip();
+    ctx.fillStyle = "rgba(255,255,255,0.02)";
+    ctx.fill();
+    drawGrid(ctx, rect, kind, map);
+    if (sk) {
+        drawSensors(ctx, sk, kind, map);
+        if (sk.has_body) {
+            drawBones(ctx, sk, map);
+            drawJoints(ctx, sk, kind, map);
+        }
+        drawTrackers(ctx, sk, kind, map);
+    }
+    ctx.restore();
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 1;
+    roundRectPath(ctx, rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1, 14);
+    ctx.stroke();
+}
+
+function drawGrid(ctx, rect, kind, map) {
+    var scale = kind === "front" ? cam.sF : cam.sT;
+    var step = 0.5;
+    var i, p;
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,255,255,0.05)";
+    /* world-x vertical lines (both views share x horizontally) */
+    var cxw = kind === "front" ? cam.fx : cam.tx;
+    var half = rect.w / 2 / scale;
+    var x0 = Math.floor((cxw - half) / step) * step;
+    for (i = x0; i <= cxw + half; i += step) {
+        p = map([i, 0, 0]);
+        ctx.beginPath();
+        ctx.moveTo(p[0], rect.y);
+        ctx.lineTo(p[0], rect.y + rect.h);
+        ctx.stroke();
+    }
+    if (kind === "front") {
+        /* horizontal height lines plus the accent floor at y = 0 */
+        var halfY = rect.h / 2 / scale;
+        var y0 = Math.floor((cam.fy - halfY) / step) * step;
+        for (i = y0; i <= cam.fy + halfY; i += step) {
+            p = map([0, i, 0]);
+            ctx.strokeStyle = "rgba(255,255,255,0.05)";
+            ctx.beginPath();
+            ctx.moveTo(rect.x, p[1]);
+            ctx.lineTo(rect.x + rect.w, p[1]);
+            ctx.stroke();
+        }
+        p = map([0, 0, 0]);
+        ctx.strokeStyle = "rgba(94,234,212,0.35)";
+        ctx.beginPath();
+        ctx.moveTo(rect.x, p[1]);
+        ctx.lineTo(rect.x + rect.w, p[1]);
+        ctx.stroke();
+    } else {
+        var halfZ = rect.h / 2 / scale;
+        var z0 = Math.floor((cam.tz - halfZ) / step) * step;
+        for (i = z0; i <= cam.tz + halfZ; i += step) {
+            p = map([0, 0, i]);
+            ctx.strokeStyle = "rgba(255,255,255,0.05)";
+            ctx.beginPath();
+            ctx.moveTo(rect.x, p[1]);
+            ctx.lineTo(rect.x + rect.w, p[1]);
+            ctx.stroke();
+        }
+        /* origin cross */
+        p = map([0, 0, 0]);
+        ctx.strokeStyle = "rgba(94,234,212,0.30)";
+        ctx.beginPath();
+        ctx.moveTo(p[0] - 7, p[1]);
+        ctx.lineTo(p[0] + 7, p[1]);
+        ctx.moveTo(p[0], p[1] - 7);
+        ctx.lineTo(p[0], p[1] + 7);
+        ctx.stroke();
+    }
+}
+
+function drawBones(ctx, sk, map) {
+    if (!Array.isArray(sk.bones) || !sk.joints) return;
+    ctx.lineCap = "round";
+    for (var i = 0; i < sk.bones.length; i++) {
+        var pair = sk.bones[i];
+        if (!Array.isArray(pair) || pair.length < 2) continue;
+        var A = sk.joints[pair[0]], B = sk.joints[pair[1]];
+        if (!A || !B || A.s === 0 || B.s === 0) continue;
+        if (!Array.isArray(A.p) || !Array.isArray(B.p)) continue;
+        var a = map(A.p), b = map(B.p);
+        var conf = Math.min(Number(A.c) || 0, Number(B.c) || 0);
+        var alpha = Math.max(0.25, Math.min(0.95, conf));
+        var g = ctx.createLinearGradient(a[0], a[1], b[0], b[1]);
+        g.addColorStop(0, "rgba(34,211,238," + alpha + ")");
+        g.addColorStop(1, "rgba(94,234,212," + alpha + ")");
+        ctx.strokeStyle = g;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(a[0], a[1]);
+        ctx.lineTo(b[0], b[1]);
+        ctx.stroke();
+    }
+}
+
+function drawJoints(ctx, sk, kind, map) {
+    if (!sk.joints) return;
+    for (var name in sk.joints) {
+        var j = sk.joints[name];
+        if (!j || j.s === 0 || !Array.isArray(j.p)) continue;
+        var p = map(j.p);
+        var a = Math.max(0.25, Math.min(1, Number(j.c) || 0));
+        if (j.s === 1) {
+            /* inferred: hollow, amber tint */
+            ctx.strokeStyle = "rgba(251,191,36," + a + ")";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(p[0], p[1], 4, 0, Math.PI * 2);
+            ctx.stroke();
+        } else {
+            ctx.save();
+            ctx.shadowColor = "rgba(94,234,212,0.9)";
+            ctx.shadowBlur = 9;
+            ctx.fillStyle = "rgba(94,234,212," + a + ")";
+            ctx.beginPath();
+            ctx.arc(p[0], p[1], 3.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+}
+
+function drawTrackers(ctx, sk, kind, map) {
+    if (!Array.isArray(sk.trackers)) return;
+    for (var i = 0; i < sk.trackers.length; i++) {
+        var t = sk.trackers[i];
+        if (!t || !Array.isArray(t.pos)) continue;
+        var p = map(t.pos);
+        var r = 5;
+        ctx.save();
+        if (t.valid) {
+            ctx.shadowColor = "rgba(34,211,238,0.8)";
+            ctx.shadowBlur = 8;
+            ctx.fillStyle = "rgba(34,211,238,0.9)";
+        } else {
+            ctx.fillStyle = "rgba(34,211,238,0.22)";
+        }
+        ctx.beginPath();
+        ctx.moveTo(p[0], p[1] - r);
+        ctx.lineTo(p[0] + r, p[1]);
+        ctx.lineTo(p[0], p[1] + r);
+        ctx.lineTo(p[0] - r, p[1]);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+    }
+}
+
+function drawSensors(ctx, sk, kind, map) {
+    if (!Array.isArray(sk.sensors)) return;
+    ctx.font = "10px " + "-apple-system, 'Segoe UI', system-ui, sans-serif";
+    for (var i = 0; i < sk.sensors.length; i++) {
+        var s = sk.sensors[i];
+        if (!s || !Array.isArray(s.pos)) continue;
+        var p = map(s.pos);
+        var d = null;
+        if (Array.isArray(s.fwd)) {
+            var dx, dy;
+            if (kind === "front") { dx = s.fwd[0]; dy = -s.fwd[1]; }
+            else { dx = s.fwd[0]; dy = s.fwd[2]; }
+            var len = Math.hypot(dx, dy);
+            if (len > 1e-3) d = [dx / len, dy / len];
+        }
+        if (d) {
+            /* FOV wedge along the projected forward direction */
+            var ang = Math.atan2(d[1], d[0]), spread = 0.5, rr = 26;
+            ctx.beginPath();
+            ctx.moveTo(p[0], p[1]);
+            ctx.arc(p[0], p[1], rr, ang - spread, ang + spread);
+            ctx.closePath();
+            ctx.fillStyle = "rgba(94,234,212,0.08)";
+            ctx.fill();
+            ctx.strokeStyle = "rgba(94,234,212,0.35)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        } else {
+            /* forward is out of this view plane: draw a lens ring instead */
+            ctx.strokeStyle = "rgba(94,234,212,0.4)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(p[0], p[1], 7, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        ctx.fillStyle = "rgba(233,238,247,0.75)";
+        ctx.fillRect(p[0] - 3.5, p[1] - 3.5, 7, 7);
+        ctx.fillStyle = "rgba(233,238,247,0.6)";
+        ctx.fillText(String(s.id), p[0] + 9, p[1] - 6);
+    }
+}
+
+/* ---------------- calibration wizard ---------------- */
+var pairNodeSig = "";
+
+function updatePairSelects(nodes) {
+    var ids = [];
+    for (var i = 0; i < nodes.length; i++) ids.push(String(nodes[i].id));
+    var sig = ids.join("|");
+    state.nodeCount = ids.length;
+    if (sig !== pairNodeSig) {
+        pairNodeSig = sig;
+        var ref = $("pair-ref"), tgt = $("pair-target");
+        var prevRef = ref.value, prevTgt = tgt.value;
+        ref.textContent = "";
+        tgt.textContent = "";
+        for (i = 0; i < ids.length; i++) {
+            ref.appendChild(el("option", { value: ids[i] }, ids[i]));
+            tgt.appendChild(el("option", { value: ids[i] }, ids[i]));
+        }
+        ref.value = ids.indexOf(prevRef) >= 0 ? prevRef : (ids[0] || "");
+        tgt.value = ids.indexOf(prevTgt) >= 0 && prevTgt !== ref.value
+            ? prevTgt : (ids[1] || ids[0] || "");
+    }
+    $("pair-hint").hidden = ids.length >= 2;
+    setBusyUI(state.calibActive);
+}
+
+function setBusyUI(active) {
+    $("pair-start").disabled = active || (state.nodeCount || 0) < 2;
+    $("body-start").disabled = active;
+    $("ps-start").disabled = active;
+    $("calib-cancel").hidden = !active;
+}
+
+function wizMsg(id, text, cls) {
+    var n = $(id);
+    n.textContent = text || "";
+    n.className = "wiz-msg" + (cls ? " " + cls : "");
+}
+
+function setBar(barId, phaseId, frac, phaseText) {
+    $(barId).style.width = Math.max(0, Math.min(100, frac * 100)) + "%";
+    $(phaseId).textContent = phaseText || "";
+}
+
+function clearBars() {
+    setBar("pair-bar", "pair-phase", 0, "");
+    setBar("body-bar", "body-phase", 0, "");
+    setBar("ps-bar", "ps-phase", 0, "");
+}
+
+function calibLoop() {
+    var want = !state.down && (state.tab === "calibration" || state.calibActive);
+    if (!want) { setTimeout(calibLoop, 500); return; }
+    fetchJSON("/api/calibrate/status").then(function (r) {
+        try { applyCalib(r.body); } catch (e) { /* never break the loop */ }
+    }).catch(function () { /* ignore */ }).finally(function () {
+        setTimeout(calibLoop, 500);
+    });
+}
+
+function applyCalib(cs) {
+    if (!cs || typeof cs !== "object") return;
+    var active = !!cs.active;
+    state.calibActive = active;
+    if (cs.kind) state.calibKind = String(cs.kind);
+    setBusyUI(active);
+    var head = $("calib-state");
+    if (active) {
+        var prog = cs.progress || {};
+        var done = Number(prog.done) || 0, needed = Number(prog.needed) || 0;
+        var frac = needed > 0 ? done / needed : 0;
+        var ptext = String(cs.phase || "working") +
+            (needed > 0 ? "  " + done + " / " + needed : "");
+        head.textContent = "Running " + state.calibKind + " - " + ptext;
+        if (state.calibKind === "pair") {
+            setBar("pair-bar", "pair-phase", frac, ptext);
+            $("pair-rmse-block").hidden = true;
+            wizMsg("pair-msg", "");
+        } else if (state.calibKind === "body") {
+            setBar("body-bar", "body-phase", frac, ptext);
+            wizMsg("body-msg", "");
+        } else if (state.calibKind === "playspace") {
+            setBar("ps-bar", "ps-phase", frac, ptext);
+            wizMsg("ps-msg", "");
+        }
+        return;
+    }
+    head.textContent = "Idle. One job runs at a time.";
+    if (!cs.done || !state.calibKind) return;
+    /* finished result available until the next job starts */
+    var ok = !!cs.ok;
+    var msg = cs.message ? String(cs.message) : (ok ? "Done." : "Failed.");
+    if (state.calibKind === "pair") {
+        setBar("pair-bar", "pair-phase", ok ? 1 : 0, "");
+        if (ok) {
+            var rmse = Number(cs.rmse_cm) || 0;
+            $("pair-rmse-block").hidden = false;
+            $("pair-rmse").textContent = fmt1(rmse);
+            var v = $("pair-verdict"), adv = $("pair-advice");
+            if (rmse < 2) {
+                v.textContent = "excellent";
+                v.className = "chip chip-ok";
+                adv.textContent = "RMSE under 2 cm. The pair is well aligned.";
+            } else if (rmse < 3) {
+                v.textContent = "ok";
+                v.className = "chip chip-warn";
+                adv.textContent = "Acceptable. The filter absorbs the rest.";
+            } else {
+                v.textContent = "redo";
+                v.className = "chip chip-err";
+                adv.textContent = "Too high. Move slower, stand closer, and cover " +
+                    "more of the overlap volume, then run it again.";
+            }
+            wizMsg("pair-msg", msg, "ok");
+        } else {
+            $("pair-rmse-block").hidden = true;
+            wizMsg("pair-msg", msg, "err");
+        }
+    } else if (state.calibKind === "body") {
+        setBar("body-bar", "body-phase", ok ? 1 : 0, "");
+        wizMsg("body-msg", msg, ok ? "ok" : "err");
+    } else if (state.calibKind === "playspace") {
+        setBar("ps-bar", "ps-phase", ok ? 1 : 0, "");
+        wizMsg("ps-msg", msg, ok ? "ok" : "err");
+    }
+}
+
+function startPair() {
+    var ref = $("pair-ref").value, tgt = $("pair-target").value;
+    if (!ref || !tgt) return;
+    if (ref === tgt) {
+        wizMsg("pair-msg", "Pick two different sensors.", "err");
+        return;
+    }
+    $("pair-rmse-block").hidden = true;
+    wizMsg("pair-msg", "");
+    $("pair-start").disabled = true;
+    postJSON("/api/calibrate/pair", { reference: ref, target: tgt }).then(function (r) {
+        if (r.body && r.body.ok) {
+            state.calibKind = "pair";
+            state.calibActive = true;
+            setBusyUI(true);
+        } else {
+            wizMsg("pair-msg",
+                r.body && r.body.error ? String(r.body.error) : "Could not start.",
+                "err");
+            setBusyUI(state.calibActive);
+        }
+    }).catch(function () {
+        wizMsg("pair-msg", "Request failed.", "err");
+        setBusyUI(state.calibActive);
+    });
+}
+
+function startBody() {
+    var secs = parseInt($("body-seconds").value, 10);
+    if (!isFinite(secs) || secs < 1) secs = 15;
+    wizMsg("body-msg", "");
+    $("body-start").disabled = true;
+    postJSON("/api/calibrate/body", { seconds: secs }).then(function (r) {
+        if (r.body && r.body.ok) {
+            state.calibKind = "body";
+            state.calibActive = true;
+            setBusyUI(true);
+        } else {
+            wizMsg("body-msg",
+                r.body && r.body.error ? String(r.body.error) : "Could not start.",
+                "err");
+            setBusyUI(state.calibActive);
+        }
+    }).catch(function () {
+        wizMsg("body-msg", "Request failed.", "err");
+        setBusyUI(state.calibActive);
+    });
+}
+
+function startPlayspace() {
+    wizMsg("ps-msg", "");
+    $("ps-start").disabled = true;
+    postJSON("/api/calibrate/playspace", { hand: state.hand }).then(function (r) {
+        if (r.http === 501) {
+            $("ps-hint").hidden = false;
+            wizMsg("ps-msg", "");
+            setBusyUI(state.calibActive);
+            return;
+        }
+        if (r.body && r.body.ok) {
+            state.calibKind = "playspace";
+            state.calibActive = true;
+            setBusyUI(true);
+        } else {
+            wizMsg("ps-msg",
+                r.body && r.body.error ? String(r.body.error) : "Could not start.",
+                "err");
+            setBusyUI(state.calibActive);
+        }
+    }).catch(function () {
+        wizMsg("ps-msg", "Request failed.", "err");
+        setBusyUI(state.calibActive);
+    });
+}
+
+function cancelCalib() {
+    postJSON("/api/calibrate/cancel").catch(function () { /* ignore */ });
+}
+
+/* ---------------- events feed ---------------- */
+function eventsLoop() {
+    if (state.down) { setTimeout(eventsLoop, 500); return; }
+    fetchJSON("/api/events?after=" + state.lastSeq).then(function (r) {
+        var b = r.body;
+        if (b && typeof b === "object") {
+            if (Array.isArray(b.events)) addEvents(b.events);
+            if (typeof b.latest_seq === "number" && b.latest_seq > state.lastSeq) {
+                state.lastSeq = b.latest_seq;
+            }
+            if (b.counts && typeof b.counts === "object") updateCounts(b.counts);
+        }
+    }).catch(function () { /* ignore */ }).finally(function () {
+        setTimeout(eventsLoop, 500);
+    });
+}
+
+function addEvents(list) {
+    if (!list.length) return;
+    var evList = $("ev-list");
+    for (var i = 0; i < list.length; i++) {
+        var ev = list[i];
+        if (!ev || typeof ev !== "object") continue;
+        if (typeof ev.seq === "number" && ev.seq > state.lastSeq) state.lastSeq = ev.seq;
+        var lvl = LEVELS.indexOf(ev.level) >= 0 ? ev.level : "info";
+        var row = el("div", { class: "ev ev-" + lvl },
+            el("span", { class: "ev-t" }, fmtClock(Number(ev.t))),
+            el("span", { class: "ev-chip c-" + lvl }, lvl),
+            el("span", { class: "ev-msg" }, ev.msg == null ? "" : String(ev.msg)));
+        evList.insertBefore(row, evList.firstChild);
+    }
+    while (evList.children.length > 500) evList.removeChild(evList.lastChild);
+    $("ev-empty").hidden = evList.children.length > 0;
+    if (state.follow) evList.scrollTop = 0;
+}
+
+function updateCounts(counts) {
+    for (var i = 0; i < LEVELS.length; i++) {
+        var l = LEVELS[i];
+        if (typeof counts[l] === "number") state.counts[l] = counts[l];
+    }
+    var c = state.counts;
+    $("pc-debug").textContent = fmtInt(c.debug);
+    $("pc-info").textContent = fmtInt(c.info);
+    $("pc-warn").textContent = fmtInt(c.warn);
+    $("pc-error").textContent = fmtInt(c.error);
+    $("ec-debug").textContent = fmtInt(c.debug);
+    $("ec-info").textContent = fmtInt(c.info);
+    var w = $("ec-warn");
+    w.textContent = fmtInt(c.warn);
+    w.className = "chip num " + (c.warn > 0 ? "chip-warn" : "");
+    var e = $("ec-error");
+    e.textContent = fmtInt(c.error);
+    e.className = "chip num " + (c.error > 0 ? "chip-err" : "");
+    var total = c.debug + c.info + c.warn + c.error;
+    $("badge-total").textContent = fmtInt(total) + (total === 1 ? " event" : " events");
+    $("badge-warn").hidden = c.warn === 0;
+    $("badge-warn").textContent = fmtInt(c.warn) + " warn";
+    $("badge-err").hidden = c.error === 0;
+    $("badge-err").textContent = fmtInt(c.error) + " err";
+}
+
+function applyFilter() {
+    var list = $("ev-list");
+    for (var i = 0; i < LEVELS.length; i++) {
+        list.classList.toggle("hide-" + LEVELS[i], !state.show[LEVELS[i]]);
+    }
+}
+
+/* ---------------- tutorial ---------------- */
+var ROOM_NOTES = {
+    1: "One sensor covers the front arc only. Fine for seated or front-facing play; " +
+        "turning away will occlude joints and the skeleton will degrade.",
+    2: "Two opposing sensors cover most of 360 degrees - the recommended starting " +
+        "rig. Opposed views remove front/back flips and occlusion dropouts.",
+    3: "A third sensor at a 90-degree offset fills the side gaps. Calibrate each " +
+        "added sensor against the reference (it needs view overlap with it)."
+};
+
+function roomSet(count) {
+    $("room-sen-front").style.display = "";
+    $("room-sen-back").style.display = count >= 2 ? "" : "none";
+    $("room-sen-side").style.display = count >= 3 ? "" : "none";
+    $("room-note").textContent = ROOM_NOTES[count] || "";
+    var btns = $("room-seg").querySelectorAll(".seg-btn");
+    for (var i = 0; i < btns.length; i++) {
+        btns[i].setAttribute("aria-pressed",
+            btns[i].getAttribute("data-count") === String(count) ? "true" : "false");
+    }
+}
+
+function tutGo(step) {
+    step = Math.max(1, Math.min(7, step | 0));
+    state.tutStep = step;
+    lsSet("mn.tutorial.step", String(step));
+    var pages = document.querySelectorAll(".tut-page");
+    for (var i = 0; i < pages.length; i++) {
+        pages[i].hidden = pages[i].getAttribute("data-step") !== String(step);
+    }
+    var btns = document.querySelectorAll("#tut-stepper .step-btn");
+    for (i = 0; i < btns.length; i++) {
+        var n = parseInt(btns[i].getAttribute("data-step"), 10);
+        if (n === step) btns[i].setAttribute("aria-current", "step");
+        else btns[i].removeAttribute("aria-current");
+        btns[i].classList.toggle("done", n < step);
+    }
+    $("tut-progress").textContent = "Step " + step + " of 7";
+    $("tut-back").disabled = step === 1;
+    $("tut-next").hidden = step === 7;
+}
+
+function tutFinish() {
+    lsSet("mn.tutorial.done", "1");
+    $("tut-welcome").hidden = true;
+    go("overview");
+}
+
+/* ---------------- navigation ---------------- */
+function go(tab) {
+    state.tab = tab;
+    var btns = document.querySelectorAll(".rail .tab-btn");
+    for (var i = 0; i < btns.length; i++) {
+        if (btns[i].getAttribute("data-tab") === tab) {
+            btns[i].setAttribute("aria-current", "page");
+        } else {
+            btns[i].removeAttribute("aria-current");
+        }
+    }
+    var names = ["overview", "skeleton", "calibration", "events", "tutorial"];
+    for (i = 0; i < names.length; i++) {
+        var panel = $("panel-" + names[i]);
+        var on = names[i] === tab;
+        panel.hidden = !on;
+        panel.classList.remove("show");
+        if (on) {
+            void panel.offsetWidth;   /* restart the cross-fade */
+            panel.classList.add("show");
+        }
+    }
+    if (tab === "skeleton") startSkelDraw();
+}
+
+/* ---------------- boot ---------------- */
+function boot() {
+    /* rail + shortcut navigation */
+    document.addEventListener("click", function (evt) {
+        var t = evt.target.closest ? evt.target.closest("[data-tab],[data-go]") : null;
+        if (!t) return;
+        var tab = t.getAttribute("data-tab") || t.getAttribute("data-go");
+        if (tab) go(tab);
+    });
+    $("event-badge").addEventListener("click", function () { go("events"); });
+
+    /* calibration controls */
+    $("pair-start").addEventListener("click", startPair);
+    $("body-start").addEventListener("click", startBody);
+    $("ps-start").addEventListener("click", startPlayspace);
+    $("calib-cancel").addEventListener("click", cancelCalib);
+    var handBtns = document.querySelectorAll("#wiz-playspace .seg-btn");
+    for (var i = 0; i < handBtns.length; i++) {
+        handBtns[i].addEventListener("click", function () {
+            state.hand = this.getAttribute("data-hand");
+            for (var k = 0; k < handBtns.length; k++) {
+                handBtns[k].setAttribute("aria-pressed",
+                    handBtns[k] === this ? "true" : "false");
+            }
+        });
+    }
+
+    /* event filters + follow */
+    var pills = document.querySelectorAll(".ev-head .pill-btn[data-level]");
+    for (i = 0; i < pills.length; i++) {
+        pills[i].addEventListener("click", function () {
+            var lvl = this.getAttribute("data-level");
+            state.show[lvl] = !state.show[lvl];
+            this.setAttribute("aria-pressed", state.show[lvl] ? "true" : "false");
+            applyFilter();
+        });
+    }
+    $("ev-follow").addEventListener("click", function () {
+        state.follow = !state.follow;
+        this.setAttribute("aria-pressed", state.follow ? "true" : "false");
+        if (state.follow) $("ev-list").scrollTop = 0;
+    });
+
+    /* tutorial */
+    $("tut-back").addEventListener("click", function () { tutGo(state.tutStep - 1); });
+    $("tut-next").addEventListener("click", function () { tutGo(state.tutStep + 1); });
+    $("tut-finish").addEventListener("click", tutFinish);
+    $("tut-dismiss").addEventListener("click", function () {
+        $("tut-welcome").hidden = true;
+        lsSet("mn.tutorial.step", String(state.tutStep));
+    });
+    var stepBtns = document.querySelectorAll("#tut-stepper .step-btn");
+    for (i = 0; i < stepBtns.length; i++) {
+        stepBtns[i].addEventListener("click", function () {
+            tutGo(parseInt(this.getAttribute("data-step"), 10));
+        });
+    }
+    var segBtns = $("room-seg").querySelectorAll(".seg-btn");
+    for (i = 0; i < segBtns.length; i++) {
+        segBtns[i].addEventListener("click", function () {
+            roomSet(parseInt(this.getAttribute("data-count"), 10));
+        });
+    }
+    roomSet(2);
+
+    /* veil retry */
+    $("veil-retry").addEventListener("click", function () { state.retryIn = 0; });
+
+    /* first visit: auto-open the tutorial with the welcome banner */
+    var savedStep = lsGet("mn.tutorial.step");
+    var done = lsGet("mn.tutorial.done");
+    var first = savedStep === null && done === null;
+    var step = parseInt(savedStep || "1", 10);
+    if (!isFinite(step)) step = 1;
+    tutGo(step);
+    if (first) {
+        $("tut-welcome").hidden = false;
+        go("tutorial");
+    } else {
+        go("overview");
+    }
+
+    setPill("connecting");
+    statusLoop();
+    eventsLoop();
+    calibLoop();
+    skelPollLoop();
+}
+
+boot();
+</script>
+</body>
+</html>

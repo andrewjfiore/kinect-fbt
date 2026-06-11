@@ -20,8 +20,12 @@ FetchContent_Declare(openvr
     URL https://github.com/ValveSoftware/openvr/archive/refs/tags/v2.5.1.zip
     SOURCE_SUBDIR cmake_skip
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_Declare(httplib
+    URL https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.18.3.zip
+    SOURCE_SUBDIR cmake_skip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 
-FetchContent_MakeAvailable(eigen3 njson doctest openvr)
+FetchContent_MakeAvailable(eigen3 njson doctest openvr httplib)
 
 add_library(mn_eigen INTERFACE)
 target_include_directories(mn_eigen SYSTEM INTERFACE "${eigen3_SOURCE_DIR}")
@@ -34,6 +38,13 @@ add_library(mn::json ALIAS mn_json)
 add_library(mn_doctest INTERFACE)
 target_include_directories(mn_doctest SYSTEM INTERFACE "${doctest_SOURCE_DIR}")
 add_library(mn::doctest ALIAS mn_doctest)
+
+add_library(mn_httplib INTERFACE)
+target_include_directories(mn_httplib SYSTEM INTERFACE "${httplib_SOURCE_DIR}")
+if(WIN32)
+    target_link_libraries(mn_httplib INTERFACE ws2_32 crypt32)
+endif()
+add_library(mn::httplib ALIAS mn_httplib)
 
 # Driver side only needs headers (openvr_driver.h).
 add_library(mn_openvr_headers INTERFACE)

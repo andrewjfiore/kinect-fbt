@@ -279,3 +279,119 @@ TEST_CASE("CalibrationStore malformed file fails to load") {
     std::error_code ec;
     std::filesystem::remove(path, ec);
 }
+
+TEST_CASE("AppConfig parses watchdog, dashboard, and fusion outlier keys") {
+    const json j = json::parse(R"({
+      "fusion": { "outlier_rejection": false, "outlier_threshold_m": 0.5,
+                  "outlier_weight_factor": 0.1 },
+      "watchdog": { "enable": false, "silent_seconds": 3.5, "backoff_seconds": 2.0,
+                    "max_restarts": 4, "exclude_types": ["replay", "mock"] },
+      "dashboard": { "enable": false, "bind": "0.0.0.0", "port": 9090 }
+    })");
+    const mn::AppConfig cfg = mn::AppConfig::fromJson(j);
+
+    CHECK(cfg.fusion.outlierRejection == false);
+    CHECK(cfg.fusion.outlierThresholdMeters == doctest::Approx(0.5f));
+    CHECK(cfg.fusion.outlierWeightFactor == doctest::Approx(0.1f));
+
+    CHECK(cfg.watchdog.enable == false);
+    CHECK(cfg.watchdog.silentSeconds == doctest::Approx(3.5));
+    CHECK(cfg.watchdog.backoffSeconds == doctest::Approx(2.0));
+    CHECK(cfg.watchdog.maxRestarts == 4u);
+    REQUIRE(cfg.watchdog.excludeTypes.size() == 2u);
+    CHECK(cfg.watchdog.excludeTypes[0] == "replay");
+    CHECK(cfg.watchdog.excludeTypes[1] == "mock");
+
+    CHECK(cfg.dashboard.enable == false);
+    CHECK(cfg.dashboard.bind == "0.0.0.0");
+    CHECK(cfg.dashboard.port == 9090);
+}
+
+TEST_CASE("AppConfig watchdog/dashboard/outlier defaults hold when keys are missing") {
+    const mn::AppConfig cfg = mn::AppConfig::fromJson(json::object());
+
+    CHECK(cfg.fusion.outlierRejection == true);
+    CHECK(cfg.fusion.outlierThresholdMeters == doctest::Approx(0.35f));
+    CHECK(cfg.fusion.outlierWeightFactor == doctest::Approx(0.05f));
+
+    CHECK(cfg.watchdog.enable == true);
+    CHECK(cfg.watchdog.silentSeconds == doctest::Approx(5.0));
+    CHECK(cfg.watchdog.backoffSeconds == doctest::Approx(5.0));
+    CHECK(cfg.watchdog.maxRestarts == 10u);
+    REQUIRE(cfg.watchdog.excludeTypes.size() == 1u);
+    CHECK(cfg.watchdog.excludeTypes[0] == "replay");
+
+    CHECK(cfg.dashboard.enable == true);
+    CHECK(cfg.dashboard.bind == "127.0.0.1");
+    CHECK(cfg.dashboard.port == 8211);
+
+    SUBCASE("partial watchdog object keeps sibling defaults") {
+        const json partial = json::parse(R"({"watchdog":{"silent_seconds":2.0}})");
+        const mn::AppConfig c = mn::AppConfig::fromJson(partial);
+        CHECK(c.watchdog.silentSeconds == doctest::Approx(2.0));
+        CHECK(c.watchdog.enable == true);
+        CHECK(c.watchdog.maxRestarts == 10u);
+        REQUIRE(c.watchdog.excludeTypes.size() == 1u);
+        CHECK(c.watchdog.excludeTypes[0] == "replay");
+    }
+    SUBCASE("partial dashboard object keeps sibling defaults") {
+        const json partial = json::parse(R"({"dashboard":{"port":9000}})");
+        const mn::AppConfig c = mn::AppConfig::fromJson(partial);
+        CHECK(c.dashboard.port == 9000);
+        CHECK(c.dashboard.enable == true);
+        CHECK(c.dashboard.bind == "127.0.0.1");
+    }
+}
+
+TEST_CASE("AppConfig toJson round-trips watchdog, dashboard, and outlier keys") {
+    mn::AppConfig cfg;
+    cfg.fusion.outlierRejection = false;
+    cfg.fusion.outlierThresholdMeters = 0.42f;
+    cfg.fusion.outlierWeightFactor = 0.11f;
+    cfg.watchdog.enable = false;
+    cfg.watchdog.silentSeconds = 7.5;
+    cfg.watchdog.backoffSeconds = 1.25;
+    cfg.watchdog.maxRestarts = 3;
+    cfg.watchdog.excludeTypes = {"replay", "kinect_v1"};
+    cfg.dashboard.enable = false;
+    cfg.dashboard.bind = "0.0.0.0";
+    cfg.dashboard.port = 8500;
+
+    const mn::AppConfig rt = mn::AppConfig::fromJson(cfg.toJson());
+    CHECK(rt.fusion.outlierRejection == false);
+    CHECK(rt.fusion.outlierThresholdMeters == doctest::Approx(0.42f));
+    CHECK(rt.fusion.outlierWeightFactor == doctest::Approx(0.11f));
+    CHECK(rt.watchdog.enable == false);
+    CHECK(rt.watchdog.silentSeconds == doctest::Approx(7.5));
+    CHECK(rt.watchdog.backoffSeconds == doctest::Approx(1.25));
+    CHECK(rt.watchdog.maxRestarts == 3u);
+    REQUIRE(rt.watchdog.excludeTypes.size() == 2u);
+    CHECK(rt.watchdog.excludeTypes[0] == "replay");
+    CHECK(rt.watchdog.excludeTypes[1] == "kinect_v1");
+    CHECK(rt.dashboard.enable == false);
+    CHECK(rt.dashboard.bind == "0.0.0.0");
+    CHECK(rt.dashboard.port == 8500);
+}
+
+TEST_CASE("AppConfig dashboard port range is validated") {
+    SUBCASE("port 0 throws") {
+        const json j = json::parse(R"({"dashboard":{"port":0}})");
+        CHECK_THROWS_AS((void)mn::AppConfig::fromJson(j), std::runtime_error);
+    }
+    SUBCASE("port 70000 throws with field context") {
+        const json j = json::parse(R"({"dashboard":{"port":70000}})");
+        CHECK_THROWS_AS((void)mn::AppConfig::fromJson(j), std::runtime_error);
+        try {
+            (void)mn::AppConfig::fromJson(j);
+            FAIL("expected std::runtime_error");
+        } catch (const std::runtime_error& e) {
+            CHECK(std::string(e.what()).find("config.dashboard.port") != std::string::npos);
+        }
+    }
+    SUBCASE("in-range ports parse") {
+        const json one = json::parse(R"({"dashboard":{"port":1}})");
+        CHECK(mn::AppConfig::fromJson(one).dashboard.port == 1);
+        const json top = json::parse(R"({"dashboard":{"port":65535}})");
+        CHECK(mn::AppConfig::fromJson(top).dashboard.port == 65535);
+    }
+}

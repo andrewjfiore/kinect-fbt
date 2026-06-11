@@ -2,6 +2,11 @@ add_executable(marionette main.cpp)
 target_link_libraries(marionette PRIVATE
     mn_core mn_capture_mock mn_endpoint_osc mn_endpoint_ovr_bridge)
 
+if(MN_BUILD_DASHBOARD)
+    target_link_libraries(marionette PRIVATE mn_dashboard)
+    target_compile_definitions(marionette PRIVATE MN_HAS_DASHBOARD)
+endif()
+
 if(MN_HAS_KINECT_V2)
     target_link_libraries(marionette PRIVATE mn_capture_kinect_v2)
     target_compile_definitions(marionette PRIVATE MN_HAS_KINECT_V2)

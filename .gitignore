@@ -10,3 +10,4 @@ CMakeUserPresets.json
 calibration.json
 *.jsonl
 !tests/data/*.jsonl
+calibration-rig.json

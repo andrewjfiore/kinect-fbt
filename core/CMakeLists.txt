@@ -1,5 +1,6 @@
 add_library(mn_core STATIC
     src/log.cpp
+    src/events.cpp
     src/net.cpp
     src/skeleton.cpp
     src/filters.cpp

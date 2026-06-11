@@ -4,6 +4,8 @@
 
 #include "mn/fusion.hpp"
 
+#include "mn/log.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -161,6 +163,10 @@ struct FusionEngine::Impl {
 
     // Tick-thread only.
     std::array<OneEuroVec3, kJointCount> filters;
+
+    // Tick-thread only: per node-joint "currently an outlier" flags so the
+    // transition into outlier state warns exactly once instead of every tick.
+    std::unordered_map<std::string, std::array<bool, kJointCount>> outlierLog;
 };
 
 FusionEngine::FusionEngine(FusionConfig cfg) : impl_(std::make_unique<Impl>()) {
@@ -212,11 +218,13 @@ bool FusionEngine::fuse(double now, SkeletonFrame& outWorld) {
     const FusionConfig& cfg = impl_->cfg;
 
     struct View {
+        std::string nodeId;
         Pose extrinsic;
         SkeletonFrame frame;
         bool hasPlane = false;
         Vec3 planeNormal{Vec3::Zero()};
         Vec3 planeOrigin{Vec3::Zero()};
+        std::array<bool, kJointCount>* outlierLog = nullptr; // per-joint warn state
     };
     std::vector<View> views;
     {
@@ -230,24 +238,36 @@ bool FusionEngine::fuse(double now, SkeletonFrame& outWorld) {
             if (now - box.frame.timestamp > cfg.staleSeconds)
                 continue;
             View v;
+            v.nodeId = entry.first;
             v.extrinsic = box.extrinsic;
             v.frame = box.frame;
             views.push_back(std::move(v));
         }
     }
-    for (View& v : views)
+    for (View& v : views) {
         v.hasPlane = torsoPlaneLocal(v.frame, v.planeNormal, v.planeOrigin);
+        v.outlierLog = &impl_->outlierLog[v.nodeId];
+    }
 
     outWorld = SkeletonFrame{};
     outWorld.timestamp = now;
 
+    struct Candidate {
+        size_t viewIdx = 0;
+        Vec3 worldPos{Vec3::Zero()};
+        float weight = 0.0f;
+        bool tracked = false;
+        bool outlier = false;
+    };
+    std::vector<Candidate> cands;
+    cands.reserve(views.size());
+
     bool anyJoint = false;
     for (size_t i = 0; i < kJointCount; ++i) {
         const Joint j = static_cast<Joint>(i);
-        float wsum = 0.0f;
-        Vec3 acc = Vec3::Zero();
-        bool anyTracked = false;
-        for (const View& v : views) {
+        cands.clear();
+        for (size_t vi = 0; vi < views.size(); ++vi) {
+            const View& v = views[vi];
             const JointSample& s = v.frame[j];
             if (s.state == TrackState::NotTracked || s.confidence < cfg.minConfidence)
                 continue;
@@ -258,9 +278,70 @@ bool FusionEngine::fuse(double now, SkeletonFrame& outWorld) {
                 w *= cfg.occlusionPenalty;
             if (w <= 0.0f)
                 continue;
-            acc += w * v.extrinsic.apply(s.pos);
-            wsum += w;
-            if (s.state == TrackState::Tracked)
+            Candidate c;
+            c.viewIdx = vi;
+            c.worldPos = v.extrinsic.apply(s.pos);
+            c.weight = w;
+            c.tracked = (s.state == TrackState::Tracked);
+            cands.push_back(c);
+        }
+
+        // Cross-node outlier rejection (only meaningful with >= 2 contributors;
+        // single-node joints are untouched). Greedy robust pass: repeatedly take
+        // the not-yet-flagged candidate farthest from the weighted consensus of
+        // the OTHER contributors and, when it exceeds the threshold, downweight
+        // it before re-checking the rest. Flagging the worst offender first
+        // keeps one large glitch from dragging the consensus and condemning the
+        // good views along with it. With exactly two contributors there is no
+        // majority, so a disagreement flags BOTH (symmetric mistrust) and the
+        // fused mean stays between them.
+        if (cfg.outlierRejection && cands.size() >= 2) {
+            for (;;) {
+                std::ptrdiff_t worst = -1;
+                float worstDist = cfg.outlierThresholdMeters;
+                for (size_t ci = 0; ci < cands.size(); ++ci) {
+                    if (cands[ci].outlier)
+                        continue;
+                    Vec3 oacc = Vec3::Zero();
+                    float osum = 0.0f;
+                    for (size_t cj = 0; cj < cands.size(); ++cj) {
+                        if (cj == ci)
+                            continue;
+                        oacc += cands[cj].weight * cands[cj].worldPos;
+                        osum += cands[cj].weight;
+                    }
+                    if (osum <= 0.0f)
+                        continue;
+                    const float dist = (cands[ci].worldPos - oacc / osum).norm();
+                    if (dist > worstDist) {
+                        worst = static_cast<std::ptrdiff_t>(ci);
+                        worstDist = dist;
+                    }
+                }
+                if (worst < 0)
+                    break;
+                Candidate& c = cands[static_cast<size_t>(worst)];
+                c.outlier = true;
+                c.weight *= cfg.outlierWeightFactor;
+            }
+        }
+
+        float wsum = 0.0f;
+        Vec3 acc = Vec3::Zero();
+        bool anyTracked = false;
+        for (const Candidate& c : cands) {
+            const View& v = views[c.viewIdx];
+            // Warn once per node-joint transition into outlier state.
+            bool& wasOutlier = (*v.outlierLog)[i];
+            if (c.outlier && !wasOutlier)
+                log::warn("fusion: node \"", v.nodeId, "\" ", jointName(j),
+                          " deviates from cross-node consensus; downweighted");
+            wasOutlier = c.outlier;
+            if (c.weight <= 0.0f)
+                continue;
+            acc += c.weight * c.worldPos;
+            wsum += c.weight;
+            if (c.tracked)
                 anyTracked = true;
         }
         if (wsum <= 0.0f)

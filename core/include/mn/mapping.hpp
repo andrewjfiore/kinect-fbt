@@ -48,7 +48,9 @@ struct MappingConfig {
     std::vector<TrackerRole> roles = {TrackerRole::Waist, TrackerRole::LeftFoot,
                                       TrackerRole::RightFoot};
     bool emitHead = true;        // append a Head reference pose
-    float velocitySmooth = 0.5f; // EMA alpha for velocity estimates
+    // EMA alpha applied to the NEW raw velocity sample:
+    // v = prev + velocitySmooth * (raw - prev). 1.0 = no smoothing.
+    float velocitySmooth = 0.5f;
 };
 
 class TrackerMapper {

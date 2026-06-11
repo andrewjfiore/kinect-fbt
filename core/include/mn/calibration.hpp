@@ -34,6 +34,17 @@ struct PairCalibrationOptions {
     size_t minSamples = 200;         // point pairs needed before solve()
     std::vector<Joint> joints = {Joint::Head,   Joint::Hips,   Joint::WristL,
                                  Joint::WristR, Joint::AnkleL, Joint::AnkleR};
+
+    // Stillness gate: mixed-SDK rigs (v1+v2) deliver skeletons with different
+    // latencies, so a moving joint pairs frames that are effectively tens of
+    // ms apart and the skew becomes position error. A joint contributes only
+    // while it moves slower than this in BOTH views (m/s). <= 0 disables.
+    float maxJointSpeed = 0.2f;
+    // Trimmed re-solve: after the first fit, drop pairs whose residual
+    // exceeds trimFactor * median residual and re-solve (two passes).
+    // Robust against the occasional garbage joint estimate.
+    bool trimOutliers = true;
+    float trimFactor = 2.5f;
 };
 
 class PairCalibrationSession {
@@ -51,11 +62,20 @@ public:
 
     // Solves target-local -> reference-local. With the reference node's
     // extrinsic E_ref, the target's extrinsic is E_ref ∘ fit.transform.
+    // When trimming is enabled, RigidFit.samples/rmse describe the inlier set.
     RigidFit solve() const;
 
 private:
+    struct MotionTrack {
+        Vec3 pos{Vec3::Zero()};
+        double t = -1.0;
+        bool still = false;
+    };
+
     Options opt_;
     std::vector<Vec3> refPts_, tgtPts_;
+    std::array<MotionTrack, kJointCount> refTrack_{};
+    std::array<MotionTrack, kJointCount> tgtTrack_{};
 };
 
 // worldPts[i] (Marionette world) correspond to externalPts[i] (e.g. SteamVR).

@@ -83,6 +83,36 @@ void PairCalibrationSession::addFramePair(const SkeletonFrame& reference,
     if (!reference.hasBody || !target.hasBody) {
         return;
     }
+
+    // Per-joint motion tracks: `still` holds the speed verdict from the most
+    // recent timestamp advance. Lost joints invalidate their track; a fresh
+    // pair of distinct frames is needed before the joint counts as still.
+    const auto updateTrack = [this](MotionTrack& tr, const JointSample& s, double t) {
+        if (s.state != TrackState::Tracked) {
+            tr.t = -1.0;
+            tr.still = false;
+            return;
+        }
+        if (tr.t >= 0.0 && t > tr.t) {
+            const double dt = t - tr.t;
+            const float speed = (s.pos - tr.pos).norm() / static_cast<float>(dt);
+            tr.still = speed <= opt_.maxJointSpeed;
+        }
+        if (t != tr.t) {
+            tr.pos = s.pos;
+            tr.t = t;
+        }
+    };
+
+    const bool gate = opt_.maxJointSpeed > 0.0f;
+    if (gate) {
+        for (const Joint j : opt_.joints) {
+            const auto idx = static_cast<size_t>(j);
+            updateTrack(refTrack_[idx], reference[j], reference.timestamp);
+            updateTrack(tgtTrack_[idx], target[j], target.timestamp);
+        }
+    }
+
     if (std::abs(reference.timestamp - target.timestamp) >
         static_cast<double>(opt_.maxTimeDeltaSec)) {
         return;
@@ -96,10 +126,17 @@ void PairCalibrationSession::addFramePair(const SkeletonFrame& reference,
         if (a.confidence < opt_.minConfidence || b.confidence < opt_.minConfidence) {
             continue;
         }
+        if (gate) {
+            const auto idx = static_cast<size_t>(j);
+            if (!refTrack_[idx].still || !tgtTrack_[idx].still) {
+                continue;
+            }
+        }
         refPts_.push_back(a.pos);
         tgtPts_.push_back(b.pos);
     }
 }
+
 
 size_t PairCalibrationSession::sampleCount() const {
     return refPts_.size();
@@ -113,7 +150,47 @@ RigidFit PairCalibrationSession::solve() const {
     }
     // src = target-local points, dst = reference-local points, so the fit maps
     // target-local -> reference-local.
-    return solveRigid(tgtPts_, refPts_);
+    RigidFit fit = solveRigid(tgtPts_, refPts_);
+    if (!fit.ok || !opt_.trimOutliers) {
+        return fit;
+    }
+
+    // Trimmed re-solve: drop pairs with residual > trimFactor * median and
+    // refit, twice. Keeps the fit honest against sporadic garbage joints.
+    std::vector<Vec3> src = tgtPts_;
+    std::vector<Vec3> dst = refPts_;
+    for (int pass = 0; pass < 2; ++pass) {
+        std::vector<float> resid(src.size());
+        for (size_t i = 0; i < src.size(); ++i) {
+            resid[i] = (fit.transform.apply(src[i]) - dst[i]).norm();
+        }
+        std::vector<float> sorted = resid;
+        std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+        const float median = sorted[sorted.size() / 2];
+        const float cutoff = std::max(opt_.trimFactor * median, 0.01f);
+
+        std::vector<Vec3> keptSrc, keptDst;
+        keptSrc.reserve(src.size());
+        keptDst.reserve(dst.size());
+        for (size_t i = 0; i < src.size(); ++i) {
+            if (resid[i] <= cutoff) {
+                keptSrc.push_back(src[i]);
+                keptDst.push_back(dst[i]);
+            }
+        }
+        const size_t keepFloor = std::max<size_t>(opt_.minSamples / 2, 3);
+        if (keptSrc.size() == src.size() || keptSrc.size() < keepFloor) {
+            break;
+        }
+        const RigidFit refit = solveRigid(keptSrc, keptDst);
+        if (!refit.ok) {
+            break;
+        }
+        fit = refit;
+        src.swap(keptSrc);
+        dst.swap(keptDst);
+    }
+    return fit;
 }
 
 RigidFit solveAnchor(const std::vector<Vec3>& worldPts, const std::vector<Vec3>& externalPts) {

@@ -30,6 +30,9 @@ public:
     virtual const NodeDescriptor& descriptor() const = 0;
     // Begin emitting frames via `cb`. Returns false on failure (see lastError()).
     virtual bool start(FrameCallback cb) = 0;
+    // Must be idempotent and safe to call on a never-started node. Nodes are
+    // not required to support start() after stop(); restart is done by
+    // recreating the node through its factory (see the pipeline watchdog).
     virtual void stop() = 0;
     virtual bool isRunning() const = 0;
     virtual std::string lastError() const { return {}; }

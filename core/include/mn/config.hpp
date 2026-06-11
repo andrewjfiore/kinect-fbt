@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
@@ -30,11 +31,32 @@ struct EndpointConfigEntry {
     nlohmann::json params;
 };
 
+// Node watchdog: when a (non-excluded) capture node stops delivering frames,
+// the pipeline recreates it from its factory and restarts it with backoff.
+// JSON: "watchdog": { "enable", "silent_seconds", "backoff_seconds",
+//                     "max_restarts", "exclude_types" }
+struct WatchdogConfig {
+    bool enable = true;
+    double silentSeconds = 5.0;  // no frame for this long -> restart
+    double backoffSeconds = 5.0; // min delay between restart attempts per node
+    uint32_t maxRestarts = 10;   // per node, per run
+    std::vector<std::string> excludeTypes = {"replay"}; // legitimately finite
+};
+
+// Local web dashboard. JSON: "dashboard": { "enable", "bind", "port" }
+struct DashboardConfig {
+    bool enable = true;
+    std::string bind = "127.0.0.1";
+    uint16_t port = 8211;
+};
+
 struct AppConfig {
     std::vector<NodeConfigEntry> nodes;
     std::vector<EndpointConfigEntry> endpoints;
     FusionConfig fusion;
     MappingConfig mapping;
+    WatchdogConfig watchdog;
+    DashboardConfig dashboard;
     double tickHz = 90.0;
     std::string calibrationFile = "calibration.json";
 

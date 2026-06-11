@@ -6,7 +6,9 @@
 
 namespace mn::log {
 
-enum class Level { Debug = 0, Info = 1, Warn = 2, Error = 3 };
+// Off is a console-filter level only (nothing is ever written AT Off); the
+// secondary sink still receives every message when the console is Off.
+enum class Level { Debug = 0, Info = 1, Warn = 2, Error = 3, Off = 4 };
 
 void setLevel(Level lvl);
 Level level();

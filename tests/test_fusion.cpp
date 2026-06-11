@@ -213,3 +213,102 @@ TEST_CASE("fusion: NotTracked and low-confidence samples are ignored") {
     // The rest of the body still fuses normally.
     CHECK((fused[Joint::Hips].pos - truth[Joint::Hips].pos).norm() < 1e-3f);
 }
+
+namespace {
+
+// Side sensor at world (2.5, 1, 0) looking along -X toward the user: local +Z
+// (toward the user) maps to world -X, i.e. a -90 degree yaw.
+Pose sideExtrinsic() {
+    const Quat r(Eigen::AngleAxisf(-0.5f * std::numbers::pi_v<float>, Vec3::UnitY()));
+    return Pose{Vec3(2.5f, 1.0f, 0.0f), r};
+}
+
+} // namespace
+
+TEST_CASE("fusion: outlier rejection suppresses one glitching view of a joint") {
+    const double t0 = 70.0;
+    const SkeletonFrame truth = standingBody(t0);
+    const Pose front = frontExtrinsic();
+    const Pose back = backExtrinsic();
+    const Pose side = sideExtrinsic();
+
+    const SkeletonFrame frontLocal = toLocal(truth, front);
+    SkeletonFrame backLocal = toLocal(truth, back);
+    const SkeletonFrame sideLocal = toLocal(truth, side);
+    // One node reports the right wrist a full meter off (glitch or bad
+    // calibration). Rigid transforms preserve distances, so this is a 1.0 m
+    // world-space error from that view.
+    backLocal[Joint::WristR].pos += Vec3(1.0f, 0.0f, 0.0f);
+
+    auto wristError = [&](bool rejection) {
+        FusionConfig cfg;
+        cfg.outlierRejection = rejection;
+        FusionEngine eng(cfg);
+        eng.setNode("front", front);
+        eng.setNode("back", back);
+        eng.setNode("side", side);
+        eng.submit("front", frontLocal);
+        eng.submit("back", backLocal);
+        eng.submit("side", sideLocal);
+        SkeletonFrame fused;
+        REQUIRE(eng.fuse(t0 + 0.01, fused));
+        REQUIRE(fused.hasBody);
+        return (fused[Joint::WristR].pos - truth[Joint::WristR].pos).norm();
+    };
+
+    // With rejection on, the two agreeing views form the consensus and the
+    // glitching node is downweighted to outlierWeightFactor: the fused joint
+    // barely moves.
+    CHECK(wristError(true) < 0.05f);
+    // Without rejection the meter-off sample drags the weighted mean visibly.
+    CHECK(wristError(false) > 0.15f);
+}
+
+TEST_CASE("fusion: two disagreeing nodes are both penalized (symmetric mistrust)") {
+    // Property: with exactly two contributors there is no majority to decide
+    // which view is wrong - each candidate's "consensus" is just the other
+    // view. When they disagree beyond outlierThresholdMeters BOTH get the
+    // outlier penalty (symmetric mistrust), so the fused position remains the
+    // finite weighted mean BETWEEN the two views rather than snapping to
+    // either one, and the fused confidence collapses to flag the conflict.
+    const double t0 = 80.0;
+    const SkeletonFrame truth = standingBody(t0);
+    const Pose front = frontExtrinsic();
+    const Pose back = backExtrinsic();
+
+    SkeletonFrame frontLocal = toLocal(truth, front);
+    SkeletonFrame backLocal = toLocal(truth, back);
+    // Front extrinsic is a pure translation (local x == world x); back is a
+    // 180 degree yaw (local x == world -x). Push the views 0.8 m apart.
+    frontLocal[Joint::WristR].pos += Vec3(0.4f, 0.0f, 0.0f); // world +0.4 x
+    backLocal[Joint::WristR].pos += Vec3(0.4f, 0.0f, 0.0f);  // world -0.4 x
+
+    FusionEngine eng; // outlier rejection on by default
+    eng.setNode("front", front);
+    eng.setNode("back", back);
+    eng.submit("front", frontLocal);
+    eng.submit("back", backLocal);
+
+    SkeletonFrame fused;
+    REQUIRE(eng.fuse(t0 + 0.01, fused));
+    REQUIRE(fused.hasBody);
+
+    const Vec3 hi = truth[Joint::WristR].pos + Vec3(0.4f, 0.0f, 0.0f);
+    const Vec3 lo = truth[Joint::WristR].pos - Vec3(0.4f, 0.0f, 0.0f);
+    const Vec3 p = fused[Joint::WristR].pos;
+    CHECK(std::isfinite(p.x()));
+    CHECK(std::isfinite(p.y()));
+    CHECK(std::isfinite(p.z()));
+    // Between the two views along the axis of disagreement...
+    CHECK(p.x() >= lo.x() - 1e-4f);
+    CHECK(p.x() <= hi.x() + 1e-4f);
+    // ...and unmoved on the axes the views agree on.
+    CHECK(p.y() == doctest::Approx(truth[Joint::WristR].pos.y()).epsilon(1e-3));
+    CHECK(p.z() == doctest::Approx(truth[Joint::WristR].pos.z()).epsilon(1e-3));
+    // Both views were penalized: the joint's total weight (and therefore its
+    // fused confidence) collapses instead of staying near 1.0.
+    CHECK(fused[Joint::WristR].confidence < 0.2f);
+    // Joints the nodes agree on are untouched by the rejection pass.
+    CHECK((fused[Joint::Hips].pos - truth[Joint::Hips].pos).norm() < 1e-3f);
+    CHECK(fused[Joint::Hips].confidence == doctest::Approx(1.0f));
+}

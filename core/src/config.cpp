@@ -3,6 +3,7 @@
 #include "mn/log.hpp"
 #include "mn/skeleton.hpp"
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -164,6 +165,12 @@ AppConfig AppConfig::fromJson(const nlohmann::json& j) {
             getFloat(f, "occlusion_penalty", cfg.fusion.occlusionPenalty, fctx);
         cfg.fusion.boneLengthConstraint =
             getBool(f, "bone_length_constraint", cfg.fusion.boneLengthConstraint, fctx);
+        cfg.fusion.outlierRejection =
+            getBool(f, "outlier_rejection", cfg.fusion.outlierRejection, fctx);
+        cfg.fusion.outlierThresholdMeters =
+            getFloat(f, "outlier_threshold_m", cfg.fusion.outlierThresholdMeters, fctx);
+        cfg.fusion.outlierWeightFactor =
+            getFloat(f, "outlier_weight_factor", cfg.fusion.outlierWeightFactor, fctx);
         if (f.contains("filter")) {
             const json& fl = f.at("filter");
             if (!fl.is_object())
@@ -204,6 +211,49 @@ AppConfig AppConfig::fromJson(const nlohmann::json& j) {
             getFloat(m, "velocity_smooth", cfg.mapping.velocitySmooth, mctx);
     }
 
+    if (j.contains("watchdog")) {
+        const json& w = j.at("watchdog");
+        if (!w.is_object())
+            fail(ctx + ".watchdog", "must be an object");
+        const std::string wctx = ctx + ".watchdog";
+        cfg.watchdog.enable = getBool(w, "enable", cfg.watchdog.enable, wctx);
+        cfg.watchdog.silentSeconds =
+            getNumber(w, "silent_seconds", cfg.watchdog.silentSeconds, wctx);
+        cfg.watchdog.backoffSeconds =
+            getNumber(w, "backoff_seconds", cfg.watchdog.backoffSeconds, wctx);
+        const double restarts =
+            getNumber(w, "max_restarts", static_cast<double>(cfg.watchdog.maxRestarts), wctx);
+        if (restarts < 0.0 || restarts > 4294967295.0 || restarts != std::floor(restarts))
+            fail(wctx + ".max_restarts", "must be a non-negative integer");
+        cfg.watchdog.maxRestarts = static_cast<uint32_t>(restarts);
+        if (w.contains("exclude_types")) {
+            const json& arr = w.at("exclude_types");
+            if (!arr.is_array())
+                fail(wctx + ".exclude_types", "must be an array of node type strings");
+            std::vector<std::string> types;
+            types.reserve(arr.size());
+            for (size_t i = 0; i < arr.size(); ++i) {
+                if (!arr[i].is_string())
+                    fail(wctx + ".exclude_types[" + std::to_string(i) + "]", "must be a string");
+                types.push_back(arr[i].get<std::string>());
+            }
+            cfg.watchdog.excludeTypes = std::move(types);
+        }
+    }
+
+    if (j.contains("dashboard")) {
+        const json& d = j.at("dashboard");
+        if (!d.is_object())
+            fail(ctx + ".dashboard", "must be an object");
+        const std::string dctx = ctx + ".dashboard";
+        cfg.dashboard.enable = getBool(d, "enable", cfg.dashboard.enable, dctx);
+        cfg.dashboard.bind = getString(d, "bind", cfg.dashboard.bind, dctx);
+        const double port = getNumber(d, "port", static_cast<double>(cfg.dashboard.port), dctx);
+        if (port < 1.0 || port > 65535.0 || port != std::floor(port))
+            fail(dctx + ".port", "must be an integer in [1, 65535]");
+        cfg.dashboard.port = static_cast<uint16_t>(port);
+    }
+
     return cfg;
 }
 
@@ -241,6 +291,10 @@ nlohmann::json AppConfig::toJson() const {
     for (const TrackerRole r : mapping.roles)
         trackers.push_back(trackerRoleName(r));
 
+    json excludeTypes = json::array();
+    for (const std::string& t : watchdog.excludeTypes)
+        excludeTypes.push_back(t);
+
     return json{{"tick_hz", tickHz},
                 {"calibration_file", calibrationFile},
                 {"nodes", nodesArr},
@@ -252,6 +306,9 @@ nlohmann::json AppConfig::toJson() const {
                   {"depth_noise_ref_m", fusion.depthNoiseRefMeters},
                   {"occlusion_penalty", fusion.occlusionPenalty},
                   {"bone_length_constraint", fusion.boneLengthConstraint},
+                  {"outlier_rejection", fusion.outlierRejection},
+                  {"outlier_threshold_m", fusion.outlierThresholdMeters},
+                  {"outlier_weight_factor", fusion.outlierWeightFactor},
                   {"filter",
                    {{"min_cutoff", fusion.filter.minCutoff},
                     {"beta", fusion.filter.beta},
@@ -259,7 +316,17 @@ nlohmann::json AppConfig::toJson() const {
                 {"mapping",
                  {{"trackers", trackers},
                   {"emit_head", mapping.emitHead},
-                  {"velocity_smooth", mapping.velocitySmooth}}}};
+                  {"velocity_smooth", mapping.velocitySmooth}}},
+                {"watchdog",
+                 {{"enable", watchdog.enable},
+                  {"silent_seconds", watchdog.silentSeconds},
+                  {"backoff_seconds", watchdog.backoffSeconds},
+                  {"max_restarts", watchdog.maxRestarts},
+                  {"exclude_types", excludeTypes}}},
+                {"dashboard",
+                 {{"enable", dashboard.enable},
+                  {"bind", dashboard.bind},
+                  {"port", dashboard.port}}}};
 }
 
 // ---------------------------------------------------------------------------

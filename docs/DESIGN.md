@@ -60,6 +60,32 @@ failures: front/back flip ambiguity and self-occlusion dropouts.
 Tier 2 (roadmap): EKF over root pose + joint angles, per-sensor measurement
 covariances from the same noise model, constant bone lengths as hard state.
 
+## Outlier rejection
+
+Cross-node guard against a miscalibrated or glitching sensor hijacking a
+joint (`fusion.outlier_rejection`, on by default). Per joint, when >= 2 nodes
+contribute, each candidate sample is compared against the **weighted
+consensus of the OTHER contributors**:
+
+```
+consensus_others(i) = sum_{k != i} w_k * worldPos_k / sum_{k != i} w_k
+outlier(i)          = |worldPos_i - consensus_others(i)| > outlier_threshold_m
+```
+
+Flagged samples get their weight multiplied by `outlier_weight_factor`
+(default 0.05) rather than dropped, so a joint never loses all contributors.
+The pass is greedy-robust: it repeatedly downweights the single worst
+offender and re-checks the rest, so one large glitch cannot drag the
+consensus and condemn the good views with it.
+
+**Symmetric two-node caveat**: with exactly two contributors there is no
+majority - a disagreement flags BOTH samples (symmetric mistrust), and since
+both weights scale by the same factor the fused mean stays between them. The
+mechanism only *identifies* the bad sensor with three or more views;
+two-node rigs still benefit because the warning event fires on the
+transition (once per node-joint, not per tick), pointing at the pair to
+recalibrate. Single-node joints are untouched.
+
 ## Calibration
 
 1. **Pair (sensor-to-sensor)**: user stands in the overlap; matched joint
@@ -94,16 +120,22 @@ through pipeline latency.
   "fusion": { "stale_seconds": 0.15, "inferred_weight": 0.25,
               "min_confidence": 0.05, "depth_noise_ref_m": 4.0,
               "occlusion_penalty": 0.3, "bone_length_constraint": true,
+              "outlier_rejection": true, "outlier_threshold_m": 0.35,
+              "outlier_weight_factor": 0.05,
               "filter": { "min_cutoff": 1.0, "beta": 0.05, "d_cutoff": 1.0 } },
   "mapping": { "trackers": ["waist","left_foot","right_foot","chest",
                             "left_knee","right_knee","left_elbow","right_elbow"],
                "emit_head": true, "velocity_smooth": 0.5 },
+  "watchdog": { "enable": true, "silent_seconds": 5.0, "backoff_seconds": 5.0,
+                "max_restarts": 10, "exclude_types": ["replay"] },
+  "dashboard": { "enable": true, "bind": "127.0.0.1", "port": 8211 },
   "endpoints": [ { "type": "osc",    "params": { "host": "<quest-ip>", "port": 9000 } },
                  { "type": "openvr", "params": { "host": "127.0.0.1", "port": 24190 } } ]
 }
 ```
 
-All fusion/mapping keys optional (defaults above). calibration.json:
+All fusion/mapping/watchdog/dashboard keys optional (defaults above).
+calibration.json:
 `{ "extrinsics": { "<nodeId>": Pose }, "body_model": { "valid": bool,
 "bone_lengths": { "<childJointName>": meters } }, "world_anchor": Pose }`.
 
@@ -129,3 +161,64 @@ are called on the tick thread and must not block (UDP fire-and-forget). A node
 crashing or going stale only removes its rows from fusion - the rig degrades
 gracefully. All cross-thread handoff happens in `FusionEngine.submit` (mutex'd
 latest-frame mailbox per node).
+
+## Watchdog
+
+`Pipeline` monitors per-node frame recency on the tick thread
+(`cfg.watchdog`, on by default). A node silent past `silent_seconds` - and
+not of an excluded type (`exclude_types`, default `["replay"]`, which is
+legitimately finite) - is **recreated from its registry factory** and
+restarted: the old `ICaptureNode` is stopped and destroyed, a fresh instance
+is built from the same `NodeConfigEntry` via the `NodeRegistry`, and
+`start()` is called again. Restart attempts are rate-limited to one per
+`backoff_seconds` per node and capped at `max_restarts` per node per run;
+a node that exhausts its budget stays down (the rig keeps running without
+it). Restart counts surface in `Pipeline::nodeStatuses()` (dashboard
+Overview tab) and each restart logs a warning into the event log.
+
+Lifetime consequence: because the watchdog re-invokes factories at any point
+during a run, **the `NodeRegistry` and `EndpointRegistry` passed to
+`Pipeline::build()` must outlive the Pipeline** (contract on
+`mn/pipeline.hpp`).
+
+## Events
+
+`mn::EventLog` (`mn/events.hpp`) is a global, thread-safe ring buffer of the
+most recent 2000 events: `{seq, t, level, message}` with `seq` monotonically
+increasing from 1. `EventLog::installLogCapture()` routes every
+`mn::log::write()` into the ring via `log::setSink` (the app installs it
+first thing in `main`, before anything can log); subsystems can also `push()`
+directly. Consumers: the dashboard (`GET /api/events?after=SEQ` - clients
+poll with their last seen `seq`) and `marionette doctor`. Lifetime per-level
+totals (`levelCounts()`) are not capped by the ring, so warn/error counters
+on the dashboard stay accurate after wraparound. The sink replaces any
+previous one (no composition); `clear()` drops buffered events but `seq`
+keeps rising.
+
+## Dashboard
+
+`mn::dash::DashboardServer` (`server/`, cpp-httplib, `MN_BUILD_DASHBOARD`)
+serves a **single embedded HTML app** (`web/index.html`, baked into the
+binary at build time; `Options::webDirOverride` serves from disk for the
+frontend dev loop) plus the JSON API in
+[DASHBOARD_API.md](DASHBOARD_API.md). It binds loopback by default, no auth;
+binding `0.0.0.0` is an explicit config choice.
+
+Integration with the pipeline is read-mostly and observer-based:
+
+- Status/skeleton endpoints read `Pipeline::stats()`, `nodeStatuses()`,
+  `latestFused()`, `latestTrackers()` - all snapshot getters, no locking the
+  tick loop.
+- For calibration the dashboard owns the pipeline's **single observer slots**
+  (`setRawFrameObserver` / `setFusedFrameObserver`, replace semantics): raw
+  frames feed pair sessions, fused frames feed body/playspace sampling.
+- Calibration jobs run on an internal worker thread, **at most one at a
+  time** (`POST` while busy returns `{"ok":false,"error":"busy"}`,
+  `/api/calibrate/cancel` aborts). Successful jobs persist the
+  `CalibrationStore`; pair jobs additionally call
+  `Pipeline::applyNodeExtrinsic` so the fix is live without a restart, while
+  a new playspace anchor reaches the SteamVR bridge on the next pipeline
+  start (anchor injection happens at endpoint build time).
+- The playspace job itself is app-supplied (`Options::playspace`): only the
+  app links the OpenVR client lib, so the server stays free of that
+  dependency and returns 501 when the hook is absent.

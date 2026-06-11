@@ -31,6 +31,7 @@
 #include <atomic>
 #include <cstdio>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -165,8 +166,8 @@ constexpr double kEmptyFramePeriodSec = 1.0; // hasBody=false cadence with no sk
 
 class Kinect1Node final : public ICaptureNode {
 public:
-    Kinect1Node(std::string id, int index)
-        : desc_{std::move(id), "kinect_v1"}, index_(index) {}
+    Kinect1Node(std::string id, int index, std::optional<int> tiltDegrees)
+        : desc_{std::move(id), "kinect_v1"}, index_(index), tiltDegrees_(tiltDegrees) {}
 
     ~Kinect1Node() override { stop(); }
 
@@ -202,6 +203,19 @@ public:
         if (FAILED(hr)) {
             teardown(false);
             return fail("NuiInitialize(USES_SKELETON) failed: " + describeHr(hr));
+        }
+
+        // Optional motorized tilt (the v1 tracks nothing if it stares at the
+        // floor or ceiling). Best effort: a tilt failure is logged, not fatal.
+        if (tiltDegrees_) {
+            const LONG angle = std::clamp<LONG>(*tiltDegrees_, NUI_CAMERA_ELEVATION_MINIMUM,
+                                                NUI_CAMERA_ELEVATION_MAXIMUM);
+            const HRESULT tiltHr = sensor_->NuiCameraElevationSetAngle(angle);
+            if (FAILED(tiltHr))
+                log::warn(desc_.type, "[", desc_.id, "]: tilt to ", angle,
+                          " deg failed: ", describeHr(tiltHr));
+            else
+                log::info(desc_.type, "[", desc_.id, "]: tilt set to ", angle, " deg");
         }
 
         // Manual-reset event; the runtime resets it inside NuiSkeletonGetNextFrame.
@@ -333,6 +347,7 @@ private:
 
     NodeDescriptor desc_;
     int index_ = 0;
+    std::optional<int> tiltDegrees_;
     FrameCallback cb_;
     INuiSensor* sensor_ = nullptr;
     HANDLE frameEvent_ = nullptr;
@@ -363,9 +378,18 @@ void registerNodes(NodeRegistry& reg) {
                         return nullptr;
                     }
                 }
+                std::optional<int> tilt;
+                if (const auto it = params.find("tilt_degrees"); it != params.end()) {
+                    if (!it->is_number_integer()) {
+                        error = "kinect_v1 node \"" + id +
+                                "\": param \"tilt_degrees\" must be an integer (-27..27)";
+                        return nullptr;
+                    }
+                    tilt = it->get<int>();
+                }
                 // Range against the live sensor count is checked in start(),
                 // where the SDK is actually touched.
-                return std::make_unique<Kinect1Node>(id, index);
+                return std::make_unique<Kinect1Node>(id, index, tilt);
             });
 }
 
