@@ -14,6 +14,9 @@ Strings from above, moving a body.
 - Fuses all views into one skeleton: per-joint confidence/occlusion/depth-noise weighting,
   One-Euro filtering, bone-length constraints. Multiple viewpoints eliminate the classic
   single-Kinect failure modes (front/back flip ambiguity, self-occlusion dropouts).
+- Validates the projected skeleton every frame (finiteness, bounds, bone lengths, upright)
+  and offers one-click axis correction (Flip X/Y/Z, Swap L/R) for a rig that comes out
+  mirrored, backwards, or upside down.
 - Outputs full-body trackers two ways, simultaneously if you want:
   - **SteamVR**: an OpenVR driver exposing virtual generic trackers (works with ALVR,
     Virtual Desktop, Steam Link, Quest Link for Quest 2/3 PCVR).
@@ -37,15 +40,34 @@ Strings from above, moving a body.
 | `endpoints/osc/` | VRChat OSC Trackers endpoint |
 | `endpoints/openvr_bridge/` | UDP bridge feeding the OpenVR driver |
 | `driver/openvr/` | `driver_marionette` SteamVR driver (virtual trackers) |
+| `core/` (`projection`) | Per-frame projection validity check + axis-flip / L-R-swap correction |
 | `server/` | Web dashboard: embedded UI + JSON API (cpp-httplib) |
 | `web/` | The dashboard's single-file UI (`index.html`, embedded at build time) |
 | `app/` | `marionette` CLI: run, record, calibrate, doctor |
-| `docs/` | Design, build, usage, calibration, tutorial, dashboard API |
+| `installer/` | No-CLI installers: Windows (Inno Setup + launcher), Linux (AppImage / tarball) |
+| `docs/` | Install, user guide, design, build, usage, calibration, tutorial, dashboard API |
 
-## Quick start
+## Install and run (no command line)
 
-See [docs/BUILD.md](docs/BUILD.md) and [docs/USAGE.md](docs/USAGE.md); first time,
-start with [docs/TUTORIAL.md](docs/TUTORIAL.md).
+Download a ready-made installer from the
+[Releases page](https://github.com/andrewjfiore/kinect-fbt/releases/latest) and
+double-click it - no build tools, no terminal:
+
+- **Windows** - run `Marionette-<version>-Setup.exe`, then launch **Marionette**
+  from the Start Menu. It starts in the background and opens its dashboard in
+  your browser (no console window). The installer can register the SteamVR
+  driver for you.
+- **Linux** - download the `.AppImage`, mark it executable, and double-click; or
+  use the `.tar.gz` + `install.sh` to add an applications-menu entry.
+
+Full steps: **[docs/INSTALL.md](docs/INSTALL.md)**. Then follow the built-in
+tutorial or the **[User Guide](docs/USER_GUIDE.md)**. Everything works against a
+built-in demo before you connect any hardware.
+
+## Build from source
+
+For development or a platform without a prebuilt package. See
+[docs/BUILD.md](docs/BUILD.md) and [docs/USAGE.md](docs/USAGE.md).
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -57,7 +79,9 @@ build/app/marionette run -c config/demo.json   # no hardware needed (mock nodes)
 
 On Windows the Visual Studio generator is multi-config, so the binary lands at
 `build\app\Release\marionette.exe` (not `build/app/`). The demo run also serves the
-dashboard at http://127.0.0.1:8211.
+dashboard at http://127.0.0.1:8211 and opens it in your browser (`--no-open` to
+skip). Package the installers with the scripts in
+[`installer/`](installer/README.md).
 
 ## Standing on the shoulders of
 

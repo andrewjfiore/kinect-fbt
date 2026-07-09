@@ -153,3 +153,24 @@ Pair extrinsics and the body model are stable across sessions as long as
 nothing physically changed. The playspace anchor is the most fragile of the
 three - some streaming stacks re-seat the playspace per session, so re-running
 `calibrate playspace` at session start is cheap insurance.
+
+## Projection correction (mirrored / backwards / upside-down)
+
+Calibration fixes *where* your sensors are; it does not fix a whole-body
+**handedness or facing error** - a rig mounted so the fused skeleton comes out
+mirrored, turned 180 degrees, or upside down. That is a projection correction,
+not a calibration, and it lives on the dashboard's **Skeleton** tab under
+**Projection health** (full reference:
+[USAGE.md](USAGE.md#projection-health-and-axis-correction)).
+
+That panel also runs a live **validity check** on the projected skeleton
+(finite positions, in-bounds joints, plausible bone lengths, upright), so a bad
+extrinsic that flings a joint metres away shows up immediately rather than as
+silently wrong trackers.
+
+The correction (Flip X / Y / Z, Swap L/R) is saved in the calibration file under
+`"projection"`, so it persists with the rest of your calibration:
+
+```jsonc
+"projection": { "flip_x": false, "flip_y": false, "flip_z": false, "swap_lr": false }
+```

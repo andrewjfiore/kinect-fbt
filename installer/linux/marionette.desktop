@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Marionette
+GenericName=Full-Body Tracking
+Comment=Multi-Kinect full-body tracking for SteamVR and VRChat
+Exec=@EXEC@
+Icon=@ICON@
+Terminal=false
+Categories=Game;Utility;
+Keywords=VR;tracking;kinect;steamvr;vrchat;fbt;body;
+StartupNotify=false

@@ -100,3 +100,38 @@ Lightweight environment probe (no sensor capture):
 `driver_registered`: whether the SteamVR `openvrpaths.vrpath` external_drivers
 list contains a path ending in `marionette` (best effort; false on parse
 failure).
+
+## GET /api/projection
+The live projection correction plus a validity probe of the most recent fused
+frame.
+```jsonc
+{
+  "flip_x": false, "flip_y": false, "flip_z": false, "swap_lr": false,
+  "check": {
+    "evaluated": true,          // false until the first body is fused
+    "ok": true,                 // finite && in_bounds && bones_plausible && upright_ok
+    "finite": true,             // no NaN/Inf in any tracked joint
+    "in_bounds": true,          // all tracked joints within 4 m of the origin
+    "bones_plausible": true,    // every connected bone within [0.02, 1.0] m
+    "upright_ok": true,         // head sits above hips (catches a flipped-Y rig)
+    "tracked_joints": 19, "non_finite_joints": 0, "out_of_bounds_joints": 0,
+    "implausible_bones": 0, "worst_radius_m": 1.62, "worst_bone_error_m": 0.0,
+    "head_above_hips_m": 0.65,  // clearly negative => vertical axis flipped
+    "summary": "ok"             // "ok", "no body", or a problem list
+  }
+}
+```
+
+## POST /api/projection
+Update the projection correction. All four keys are optional; an omitted key
+keeps its current value. The change applies live on the next tick and is
+persisted to the calibration store.
+```jsonc
+{ "flip_x": true, "flip_z": true }   // e.g. correct a backwards-facing rig
+```
+Responds with the same body as `GET /api/projection` plus `"ok"` and `"error"`.
+`ok` is `true` whenever the correction was applied live; `error` is non-empty
+only when persisting to the calibration file failed (the live fix still holds).
+
+Common corrections: facing backwards -> `flip_x`+`flip_z`; mirrored left/right
+-> `flip_x`+`swap_lr`; upside down -> `flip_y`.

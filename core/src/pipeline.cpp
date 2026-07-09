@@ -2,6 +2,7 @@
 
 #include "mn/clock.hpp"
 #include "mn/log.hpp"
+#include "mn/projection.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -65,6 +66,12 @@ struct Pipeline::Impl {
     mutable std::mutex dataMutex;
     SkeletonFrame latestFused;               // default (hasBody=false) until first fuse
     std::vector<TrackerPose> latestTrackers; // empty until first fuse
+
+    // Projection correction + latest validity probe. Its own mutex so live
+    // dashboard reads/writes don't contend with the skeleton/tracker readers.
+    mutable std::mutex projMutex;
+    ProjectionCorrection projection;
+    ProjectionCheck lastProjCheck;
 
     std::thread tickThread;
     std::atomic<bool> running{false};
@@ -189,6 +196,19 @@ struct Pipeline::Impl {
             const double now = nowSeconds();
             SkeletonFrame world;
             if (fusionEngine.fuse(now, world)) {
+                // Correct then validate the projected skeleton before it maps
+                // to trackers (tracker orientations derive from these positions).
+                ProjectionCorrection pc;
+                {
+                    std::lock_guard<std::mutex> lk(projMutex);
+                    pc = projection;
+                }
+                applyProjectionCorrection(world, pc); // no-op unless active
+                const ProjectionCheck chk = checkProjection(world);
+                {
+                    std::lock_guard<std::mutex> lk(projMutex);
+                    lastProjCheck = chk;
+                }
                 const std::vector<TrackerPose> trackers = mapper.map(world, now);
                 {
                     std::lock_guard<std::mutex> lk(dataMutex);
@@ -272,6 +292,10 @@ std::unique_ptr<Pipeline> Pipeline::build(const AppConfig& cfg, const NodeRegist
 
     if (calib.bodyModel().valid)
         im.fusionEngine.setBodyModel(calib.bodyModel());
+
+    // Seed the projection correction from the persisted store so a fix applied
+    // in a previous session is in effect from the first tick.
+    im.projection = calib.projection();
 
     for (const auto& entry : cfg.endpoints) {
         nlohmann::json params = entry.params.is_null() ? nlohmann::json::object() : entry.params;
@@ -454,6 +478,21 @@ bool Pipeline::applyNodeExtrinsic(const std::string& nodeId, const Pose& extrins
         return false;
     im.fusionEngine.setNode(nodeId, extrinsic);
     return true;
+}
+
+void Pipeline::setProjectionCorrection(const ProjectionCorrection& c) {
+    std::lock_guard<std::mutex> lk(impl_->projMutex);
+    impl_->projection = c;
+}
+
+ProjectionCorrection Pipeline::projectionCorrection() const {
+    std::lock_guard<std::mutex> lk(impl_->projMutex);
+    return impl_->projection;
+}
+
+ProjectionCheck Pipeline::latestProjectionCheck() const {
+    std::lock_guard<std::mutex> lk(impl_->projMutex);
+    return impl_->lastProjCheck;
 }
 
 FusionEngine& Pipeline::fusion() { return impl_->fusionEngine; }

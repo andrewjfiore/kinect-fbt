@@ -231,6 +231,10 @@ TEST_CASE("CalibrationStore round-trips through a temp file") {
     bm.boneLengthToParent[static_cast<size_t>(mn::Joint::Neck)] = 0.09f;
     a.setBodyModel(bm);
     a.setWorldAnchor(anchor);
+    mn::ProjectionCorrection proj;
+    proj.flipX = true;
+    proj.swapLR = true;
+    a.setProjection(proj);
     REQUIRE(a.save(path.string()));
 
     mn::CalibrationStore b;
@@ -253,6 +257,11 @@ TEST_CASE("CalibrationStore round-trips through a temp file") {
 
     REQUIRE(b.worldAnchor().has_value());
     checkPoseApprox(*b.worldAnchor(), anchor);
+
+    CHECK(b.projection().flipX);
+    CHECK_FALSE(b.projection().flipY);
+    CHECK_FALSE(b.projection().flipZ);
+    CHECK(b.projection().swapLR);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);
