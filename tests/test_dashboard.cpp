@@ -219,6 +219,48 @@ TEST_CASE("dashboard: HTTP API over loopback with a live pipeline") {
         CHECK_MESSAGE(hasBack, "calibration.extrinsics does not list 'back'");
     }
 
+    // --- /api/projection: defaults, live health, and applying a flip
+    {
+        const nlohmann::json proj = getJson(cli, "/api/projection");
+        CHECK_FALSE(proj["flip_x"].get<bool>());
+        CHECK_FALSE(proj["flip_y"].get<bool>());
+        CHECK_FALSE(proj["flip_z"].get<bool>());
+        CHECK_FALSE(proj["swap_lr"].get<bool>());
+        REQUIRE(proj.contains("check"));
+        CHECK(proj["check"]["evaluated"].get<bool>());
+        CHECK(proj["check"]["ok"].get<bool>());
+        CHECK(proj["check"]["summary"].get<std::string>() == "ok");
+
+        // Apply a vertical flip; the validity check must catch the inversion.
+        auto res = cli.Post("/api/projection", nlohmann::json{{"flip_y", true}}.dump(),
+                            "application/json");
+        REQUIRE_MESSAGE(res, "POST /api/projection failed: "
+                                 << httplib::to_string(res.error()));
+        const nlohmann::json applied = nlohmann::json::parse(res->body);
+        CHECK(applied["ok"].get<bool>());
+        CHECK(applied["flip_y"].get<bool>());
+
+        bool flagged = false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < deadline) {
+            const nlohmann::json p = getJson(cli, "/api/projection");
+            if (!p["check"]["upright_ok"].get<bool>() && !p["check"]["ok"].get<bool>()) {
+                flagged = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        CHECK_MESSAGE(flagged, "flip_y did not trip the upright validity check");
+
+        // The correction persisted to the store on the way through.
+        mn::CalibrationStore reloaded;
+        REQUIRE(reloaded.load(calibPath));
+        CHECK(reloaded.projection().flipY);
+
+        // Reset for cleanliness.
+        cli.Post("/api/projection", nlohmann::json{{"flip_y", false}}.dump(), "application/json");
+    }
+
     server.stop();
     CHECK_FALSE(server.isRunning());
     pipeline->stop();

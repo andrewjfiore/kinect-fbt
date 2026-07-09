@@ -4,6 +4,7 @@ add_executable(mn_tests
     test_calibration.cpp
     test_fusion.cpp
     test_mapping.cpp
+    test_projection.cpp
     test_config.cpp
     test_pipeline.cpp
     test_mock.cpp

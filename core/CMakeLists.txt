@@ -7,6 +7,7 @@ add_library(mn_core STATIC
     src/calibration.cpp
     src/fusion.cpp
     src/mapping.cpp
+    src/projection.cpp
     src/config.cpp
     src/pipeline.cpp)
 

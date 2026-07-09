@@ -1,0 +1,136 @@
+# Build the downloadable, no-CLI installers on a version tag (or on demand) and
+# publish them to a GitHub Release: a Windows setup .exe + portable zip, and a
+# Linux .tar.gz + AppImage. Push a tag like v0.1.0 to cut a release.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number, e.g. 0.1.0'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  # --------------------------------------------------------------- Windows
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ runner.os }}-reldeps-${{ hashFiles('cmake/Deps.cmake') }}
+
+      - name: Version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then v="${GITHUB_REF_NAME#v}"; else v="${{ github.event.inputs.version }}"; fi
+          [ -n "$v" ] || v="0.0.0-dev"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Configure + build (Release)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DMN_BUILD_TESTS=OFF
+          cmake --build build --config Release --parallel
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            installer\windows\marionette.iss `
+            /DAppVersion=${{ steps.ver.outputs.version }} `
+            /DSourceExe=build\app\Release\marionette.exe `
+            /DDriverDir=build\dist\marionette
+          Rename-Item dist\MarionetteSetup.exe "Marionette-${{ steps.ver.outputs.version }}-Setup.exe"
+
+      - name: Build portable zip
+        shell: pwsh
+        run: |
+          $p = "dist\portable\Marionette"
+          New-Item -ItemType Directory -Force -Path "$p\config","$p\scripts","$p\driver" | Out-Null
+          Copy-Item build\app\Release\marionette.exe "$p\"
+          Copy-Item installer\windows\launch-marionette.vbs "$p\"
+          Copy-Item installer\windows\marionette.ico "$p\"
+          Copy-Item config\demo.json "$p\config\"
+          Copy-Item scripts\install-driver.ps1 "$p\scripts\"
+          if (Test-Path build\dist\marionette) { Copy-Item -Recurse build\dist\marionette "$p\driver\marionette" }
+          if (Test-Path docs\USER_GUIDE.md) { Copy-Item docs\USER_GUIDE.md "$p\" }
+          Compress-Archive -Path "$p" -DestinationPath "dist\Marionette-${{ steps.ver.outputs.version }}-windows-x64-portable.zip" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/Marionette-*-Setup.exe
+            dist/Marionette-*-windows-x64-portable.zip
+
+  # ----------------------------------------------------------------- Linux
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ runner.os }}-reldeps-${{ hashFiles('cmake/Deps.cmake') }}
+
+      - name: Version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then v="${GITHUB_REF_NAME#v}"; else v="${{ github.event.inputs.version }}"; fi
+          [ -n "$v" ] || v="0.0.0-dev"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Install packaging deps
+        run: sudo apt-get update && sudo apt-get install -y desktop-file-utils libfuse2
+
+      - name: Configure + build (Release)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DMN_BUILD_TESTS=OFF
+          cmake --build build --config Release --parallel
+
+      - name: Package (tarball + AppImage)
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          OUTDIR: dist
+        run: |
+          installer/linux/make-package.sh
+          installer/linux/build-appimage.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/marionette-*-linux-x86_64.tar.gz
+            dist/Marionette-*-x86_64.AppImage
+
+  # --------------------------------------------------------------- Release
+  release:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Marionette $GITHUB_REF_NAME" \
+            --generate-notes \
+            artifacts/windows/* artifacts/linux/*
