@@ -10,13 +10,16 @@
 <style>
 /* ================================================================================
    Marionette dashboard - single file, zero external requests.
-   Sections: tokens / reset / backdrop / glass / layout / typography / components /
+   Look: flat dark HUD panels, one cyan accent, no blur or decoration layers.
+   Sections: tokens / reset / layout / typography / components /
    overview / skeleton / calibration / events / tutorial / veil / motion / responsive
    ================================================================================ */
 
 /* ---------- tokens ---------- */
 :root {
-    --bg: #05070d;
+    --bg: #070a12;
+    --panel: #0d1322;
+    --panel-2: #121a2e;
     --ink: #e9eef7;
     --ink-dim: rgba(233, 238, 247, 0.60);
     --ink-faint: rgba(233, 238, 247, 0.36);
@@ -24,11 +27,8 @@
     --accent-2: #5eead4;
     --warn: #fbbf24;
     --err: #fb7185;
-    --glass: rgba(255, 255, 255, 0.06);
-    --glass-2: rgba(255, 255, 255, 0.09);
     --line: rgba(255, 255, 255, 0.10);
-    --line-top: rgba(255, 255, 255, 0.28);
-    --r: 22px;
+    --r: 14px;
     --font: -apple-system, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI",
         system-ui, sans-serif;
     --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
@@ -39,7 +39,12 @@
 html, body { height: 100%; }
 body {
     margin: 0;
-    background: var(--bg);
+    /* static grid floor: reads "game HUD", costs nothing, never moves */
+    background:
+        linear-gradient(rgba(34, 211, 238, 0.022) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(34, 211, 238, 0.022) 1px, transparent 1px),
+        radial-gradient(120% 90% at 50% 0%, #0a101f 0%, var(--bg) 70%);
+    background-size: 44px 44px, 44px 44px, 100% 100%;
     color: var(--ink);
     font: 400 14px/1.55 var(--font);
     overflow: hidden;
@@ -72,72 +77,19 @@ code {
 }
 ::-webkit-scrollbar-track { background: transparent; }
 
-/* ---------- backdrop: drifting orbs + grain ---------- */
-.backdrop { position: fixed; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
-.orb { position: absolute; border-radius: 50%; will-change: transform; }
-.orb-a {
-    width: 64vmax; height: 64vmax; left: -20vmax; top: -26vmax;
-    background: radial-gradient(circle, rgba(99, 102, 241, 0.17) 0%, transparent 62%);
-    animation: drift-a 90s ease-in-out infinite alternate;
-}
-.orb-b {
-    width: 56vmax; height: 56vmax; right: -18vmax; top: -10vmax;
-    background: radial-gradient(circle, rgba(34, 211, 238, 0.13) 0%, transparent 60%);
-    animation: drift-b 70s ease-in-out infinite alternate;
-}
-.orb-c {
-    width: 58vmax; height: 58vmax; left: 8vmax; bottom: -30vmax;
-    background: radial-gradient(circle, rgba(217, 70, 239, 0.10) 0%, transparent 60%);
-    animation: drift-c 110s ease-in-out infinite alternate;
-}
-.orb-d {
-    width: 40vmax; height: 40vmax; right: 4vmax; bottom: -12vmax;
-    background: radial-gradient(circle, rgba(94, 234, 212, 0.09) 0%, transparent 58%);
-    animation: drift-d 80s ease-in-out infinite alternate;
-}
-@keyframes drift-a { to { transform: translate(9vmax, 7vmax) scale(1.10); } }
-@keyframes drift-b { to { transform: translate(-7vmax, 9vmax) scale(0.94); } }
-@keyframes drift-c { to { transform: translate(10vmax, -6vmax) scale(1.07); } }
-@keyframes drift-d { to { transform: translate(-8vmax, -7vmax) scale(1.12); } }
-.grain {
-    position: fixed; inset: 0; width: 100%; height: 100%;
-    opacity: 0.045; pointer-events: none; z-index: 1; mix-blend-mode: overlay;
-}
-
-/* ---------- glass surfaces ---------- */
+/* ---------- panels ---------- */
 .glass, .card {
     position: relative;
-    background: var(--glass);
+    background: var(--panel);
     border: 1px solid var(--line);
     border-radius: var(--r);
-    box-shadow:
-        inset 0 1px 0 var(--line-top),
-        0 18px 50px rgba(2, 6, 18, 0.55),
-        0 4px 16px rgba(2, 6, 18, 0.40);
-    backdrop-filter: blur(22px) saturate(170%);
-    -webkit-backdrop-filter: blur(22px) saturate(170%);
+    box-shadow: 0 8px 24px rgba(2, 6, 18, 0.45);
 }
-@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
-    .glass, .card { background: rgba(15, 21, 36, 0.94); }
-}
-.card { padding: 20px 22px; transition: transform 0.35s ease, background 0.35s ease; }
-.card:hover { background: var(--glass-2); transform: translateY(-1px); }
-.card::after { /* specular sweep */
-    content: "";
-    position: absolute; inset: 0;
-    border-radius: inherit;
-    pointer-events: none;
-    background: linear-gradient(105deg,
-        transparent 42%, rgba(255, 255, 255, 0.09) 50%, transparent 58%);
-    background-size: 260% 100%;
-    background-position: 135% 0;
-    transition: background-position 1.1s ease;
-}
-.card:hover::after { background-position: -35% 0; }
+.card { padding: 20px 22px; }
 .tile {
-    background: rgba(255, 255, 255, 0.04);
+    background: rgba(255, 255, 255, 0.035);
     border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 16px;
+    border-radius: 10px;
     padding: 14px 16px;
 }
 
@@ -176,13 +128,13 @@ code {
     margin: 0 0 12px;
 }
 .hero-num {
-    font-size: 46px;
-    font-weight: 200;
+    font-size: 30px;
+    font-weight: 300;
     letter-spacing: -0.02em;
     line-height: 1.05;
     font-variant-numeric: tabular-nums;
 }
-.unit { font-size: 20px; font-weight: 300; color: var(--ink-dim); margin-left: 3px; }
+.unit { font-size: 15px; font-weight: 300; color: var(--ink-dim); margin-left: 3px; }
 .sub { font-size: 12px; color: var(--ink-dim); }
 h2.card-title { font-size: 15px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
 .num { font-variant-numeric: tabular-nums; }
@@ -314,9 +266,36 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
 }
 
 /* ---------- overview ---------- */
-.hero-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 26px; }
-.metric .overline { margin-bottom: 6px; }
+.ready-wrap { display: flex; gap: 30px; align-items: flex-start; flex-wrap: wrap; }
+.ready-block { flex: 1.1; min-width: 250px; }
+.ready-line { font-size: 30px; font-weight: 650; letter-spacing: -0.02em;
+    line-height: 1.15; margin: 2px 0 5px; }
+.ready-line.good { color: var(--accent-2); }
+.ready-line.bad { color: var(--warn); }
+.hero-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 26px;
+    flex: 1; min-width: 280px; }
+.metric .overline { margin-bottom: 4px; }
 .hero-foot { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+.quest { display: flex; flex-direction: column; }
+.q-row { display: flex; align-items: center; gap: 11px; padding: 9px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05); font-size: 13px; }
+.q-row:last-child { border-bottom: none; }
+.q-box { width: 20px; height: 20px; flex: none; border-radius: 6px;
+    border: 1px solid var(--line); color: transparent;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; }
+.q-row.done .q-box { background: rgba(94, 234, 212, 0.14);
+    border-color: rgba(94, 234, 212, 0.45); color: #8ff3e2; }
+.q-label { flex: 1; min-width: 0; }
+.q-row.done .q-label { color: var(--ink-dim); }
+.q-detail { color: var(--ink-faint); font-size: 12px;
+    font-variant-numeric: tabular-nums; white-space: nowrap; }
+.q-go { border: none; background: none; color: var(--accent); font-size: 12px;
+    font-weight: 600; padding: 2px 6px; border-radius: 6px; flex: none; }
+.q-go:hover { text-decoration: underline; }
+.quest-head { display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; }
+.quest-head .overline { margin-bottom: 8px; }
 .nodes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
     gap: 12px; }
 .node-card .nc-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
@@ -363,12 +342,9 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
     pointer-events: none;
 }
 .nobody-card {
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--panel-2);
     border: 1px solid var(--line);
-    border-radius: 18px;
-    box-shadow: inset 0 1px 0 var(--line-top);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
+    border-radius: 12px;
     padding: 18px 28px;
     text-align: center;
     color: var(--ink-dim);
@@ -390,6 +366,8 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
 .wiz-actions { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
 .rmse-block { margin-top: 12px; display: flex; align-items: baseline; gap: 10px;
     flex-wrap: wrap; }
+.stars { font-size: 17px; letter-spacing: 3px; color: var(--accent-2);
+    flex: none; }
 .rmse-num { font-size: 34px; font-weight: 200; font-variant-numeric: tabular-nums;
     letter-spacing: -0.02em; }
 .rmse-advice { font-size: 12px; color: var(--ink-dim); width: 100%; }
@@ -509,22 +487,19 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
 .veil {
     position: fixed; inset: 0; z-index: 60;
     display: flex; align-items: center; justify-content: center;
-    background: rgba(5, 7, 13, 0.55);
-    backdrop-filter: blur(18px) saturate(140%);
-    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    background: rgba(5, 7, 13, 0.82);
 }
 .veil-card { padding: 30px 38px; text-align: center; max-width: 360px; }
 .veil-card h2 { margin: 12px 0 6px; font-size: 19px; font-weight: 650; }
 .veil-card p { color: var(--ink-dim); font-size: 13px; margin: 0 0 18px; }
 .veil-card .num { color: var(--ink); font-weight: 700; }
 
-/* ---------- motion: orchestrated load + tab fade ---------- */
+/* ---------- motion: quick load + tab fade ---------- */
 @keyframes rise {
-    from { opacity: 0; transform: translateY(16px); filter: blur(10px); }
-    to { opacity: 1; transform: none; filter: none; }
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
 }
-.rise { animation: rise 0.7s cubic-bezier(0.22, 0.8, 0.26, 1) both;
-    animation-delay: var(--d, 0ms); }
+.rise { animation: rise 0.4s ease-out both; animation-delay: var(--d, 0ms); }
 @keyframes fadein {
     from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: none; }
@@ -532,11 +507,9 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
 .panel.show { animation: fadein 0.28s ease both; }
 
 @media (prefers-reduced-motion: reduce) {
-    .orb, .dot.live, .flow { animation: none !important; }
+    .dot.live, .flow { animation: none !important; }
     .rise, .panel.show { animation: none !important; }
-    .card, .card::after, .bar-fill { transition: none !important; }
-    .card:hover { transform: none; }
-    .card::after { display: none; }
+    .bar-fill { transition: none !important; }
 }
 
 /* ---------- responsive ---------- */
@@ -559,22 +532,6 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
 </style>
 </head>
 <body>
-
-<!-- ================= backdrop ================= -->
-<div class="backdrop" aria-hidden="true">
-    <div class="orb orb-a"></div>
-    <div class="orb orb-b"></div>
-    <div class="orb orb-c"></div>
-    <div class="orb orb-d"></div>
-</div>
-<svg class="grain" aria-hidden="true">
-    <filter id="grain-f">
-        <feTurbulence type="fractalNoise" baseFrequency="0.82" numOctaves="2"
-            stitchTiles="stitch"/>
-        <feColorMatrix type="saturate" values="0"/>
-    </filter>
-    <rect width="100%" height="100%" filter="url(#grain-f)"/>
-</svg>
 
 <!-- ================= top bar ================= -->
 <header class="topbar glass rise" style="--d:0ms">
@@ -614,7 +571,7 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
             <rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8"
             height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/>
             <rect x="13" y="13" width="8" height="8" rx="2"/></svg>
-        <span>Overview</span>
+        <span>Home</span>
     </button>
     <button class="tab-btn" type="button" data-tab="skeleton">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -628,14 +585,14 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
             stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
             <circle cx="12" cy="12" r="7"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>
             <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>
-        <span>Calibration</span>
+        <span>Calibrate</span>
     </button>
     <button class="tab-btn" type="button" data-tab="events">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
             stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
             <path d="M4 6h13M4 12h16M4 18h10"/>
             <circle cx="20" cy="6" r="1.6" fill="currentColor" stroke="none"/></svg>
-        <span>Events</span>
+        <span>Log</span>
     </button>
     <button class="tab-btn" type="button" data-tab="tutorial">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -643,89 +600,79 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
             aria-hidden="true">
             <path d="M12 4L2 9l10 5 10-5-10-5z"/><path d="M6 11.5V16c0 1.5 2.7 3 6 3s6-1.5
             6-3v-4.5"/></svg>
-        <span>Tutorial</span>
+        <span>Guide</span>
     </button>
 </nav>
 
 <!-- ================= content ================= -->
 <main class="content" id="content">
 
-<!-- ===== Overview ===== -->
-<section id="panel-overview" class="panel" aria-label="Overview">
+<!-- ===== Home ===== -->
+<section id="panel-overview" class="panel" aria-label="Home">
     <div class="grid">
-        <div class="card span12 rise" style="--d:120ms">
-            <div class="hero-grid">
-                <div class="metric">
-                    <div class="overline">Fused</div>
-                    <div class="hero-num"><span id="m-fused">--</span><span
-                        class="unit">%</span></div>
-                    <div class="sub num" id="m-fused-sub">of ticks</div>
+        <div class="card span12 rise" style="--d:60ms">
+            <div class="ready-wrap">
+                <div class="ready-block">
+                    <div class="overline">Status</div>
+                    <div class="ready-line" id="ready-line">Starting up</div>
+                    <div class="sub" id="ready-sub">Talking to Marionette...</div>
+                    <div class="hero-foot">
+                        <span class="chip" id="m-pipe">--</span>
+                        <span class="sub num" id="m-uptime"></span>
+                    </div>
                 </div>
-                <div class="metric">
-                    <div class="overline">Tick rate</div>
-                    <div class="hero-num"><span id="m-tick">--</span><span
-                        class="unit">Hz</span></div>
-                    <div class="sub num" id="m-tick-sub">target --</div>
-                </div>
-                <div class="metric">
-                    <div class="overline">Frames in</div>
-                    <div class="hero-num" id="m-frames">--</div>
-                    <div class="sub">all sensors, cumulative</div>
-                </div>
-                <div class="metric">
-                    <div class="overline">Trackers out</div>
-                    <div class="hero-num" id="m-trackers">--</div>
-                    <div class="sub">poses sent to endpoints</div>
+                <div class="hero-grid">
+                    <div class="metric">
+                        <div class="overline">Body lock</div>
+                        <div class="hero-num"><span id="m-fused">--</span><span
+                            class="unit">%</span></div>
+                        <div class="sub num" id="m-fused-sub">of updates</div>
+                    </div>
+                    <div class="metric">
+                        <div class="overline">Update rate</div>
+                        <div class="hero-num"><span id="m-tick">--</span><span
+                            class="unit">Hz</span></div>
+                        <div class="sub num" id="m-tick-sub">target --</div>
+                    </div>
+                    <div class="metric">
+                        <div class="overline">Frames seen</div>
+                        <div class="hero-num" id="m-frames">--</div>
+                        <div class="sub">from all sensors</div>
+                    </div>
+                    <div class="metric">
+                        <div class="overline">Poses sent</div>
+                        <div class="hero-num" id="m-trackers">--</div>
+                        <div class="sub">to your game</div>
+                    </div>
                 </div>
             </div>
-            <div class="hero-foot">
-                <span class="chip" id="m-pipe">pipeline --</span>
-                <span class="sub num" id="m-uptime"></span>
+        </div>
+
+        <div class="card span5 rise" style="--d:120ms">
+            <div class="quest-head">
+                <h2 class="overline">Setup checklist</h2>
+                <span class="chip num" id="quest-count">--</span>
+            </div>
+            <div class="quest" id="quest-list"></div>
+            <div class="wiz-actions">
+                <button class="btn btn-ghost" type="button" data-go="tutorial">
+                    Open the guide</button>
             </div>
         </div>
 
         <div class="card span7 rise" style="--d:180ms">
             <h2 class="overline">Sensors</h2>
             <div class="nodes-grid" id="nodes-grid"></div>
-            <div class="empty-note" id="nodes-empty">No capture nodes configured.</div>
+            <div class="empty-note" id="nodes-empty">No sensors configured yet.
+                The guide shows you how to add them.</div>
         </div>
 
-        <div class="card span5 rise" style="--d:240ms">
-            <h2 class="overline">Calibration</h2>
-            <div class="kv"><span class="k">Pair extrinsics</span>
-                <span class="num" id="cal-ext">--</span></div>
-            <div class="kv"><span class="k">Body model</span>
-                <span class="chip" id="cal-body">--</span></div>
-            <div class="kv"><span class="k">Playspace anchor</span>
-                <span class="chip" id="cal-anchor">--</span></div>
-            <div class="kv"><span class="k">File</span>
-                <span class="num" id="cal-file">--</span></div>
-            <div class="wiz-actions">
-                <button class="btn btn-ghost" type="button" data-go="calibration">
-                    Open calibration</button>
-            </div>
-        </div>
-
-        <div class="card span7 rise" style="--d:300ms">
-            <h2 class="overline">Endpoints</h2>
+        <div class="card span12 rise" style="--d:240ms">
+            <h2 class="overline">Outputs</h2>
             <div class="ep-grid" id="ep-grid"></div>
-            <div class="empty-note" id="ep-empty">No endpoints configured.</div>
-        </div>
-
-        <div class="card span5 rise" style="--d:360ms">
-            <h2 class="overline">Event counts</h2>
-            <div class="kv"><span class="k">Debug</span>
-                <span class="num" id="ec-debug">0</span></div>
-            <div class="kv"><span class="k">Info</span>
-                <span class="num" id="ec-info">0</span></div>
-            <div class="kv"><span class="k">Warnings</span>
-                <span class="chip" id="ec-warn">0</span></div>
-            <div class="kv"><span class="k">Errors</span>
-                <span class="chip" id="ec-error">0</span></div>
-            <div class="wiz-actions">
-                <button class="btn btn-ghost" type="button" data-go="events">
-                    Open events</button>
-            </div>
+            <div class="empty-note" id="ep-empty">Nothing is receiving trackers yet.
+                Add an output in your config: <code>osc</code> for Quest,
+                <code>openvr</code> for SteamVR.</div>
         </div>
     </div>
 </section>
@@ -743,35 +690,37 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
             <span class="view-tag right">TOP &#183; X / Z</span>
             <div class="nobody" id="skel-nobody">
                 <div class="nobody-card">
-                    <strong>No body in view</strong>
-                    Step into the sensors' overlap region to be tracked.
+                    <strong>Nobody in view</strong>
+                    Step in front of your sensors and you'll show up here.
                 </div>
             </div>
         </div>
     </div>
 </section>
 
-<!-- ===== Calibration ===== -->
-<section id="panel-calibration" class="panel" aria-label="Calibration" hidden>
+<!-- ===== Calibrate ===== -->
+<section id="panel-calibration" class="panel" aria-label="Calibrate" hidden>
     <div class="grid">
         <div class="card span12 calib-head">
-            <h2 class="overline">Calibration jobs</h2>
-            <span id="calib-state">Idle. One job runs at a time.</span>
+            <h2 class="overline">Calibrate</h2>
+            <span id="calib-state">Nothing running. Pick a step below, one at a time.</span>
             <button class="btn btn-danger" type="button" id="calib-cancel" hidden>
-                Cancel job</button>
+                Cancel</button>
         </div>
 
         <div class="card span4 wizard" id="wiz-pair">
-            <h2 class="card-title">Pair alignment</h2>
-            <p class="desc">Aligns a target sensor to the reference. Stand where both
-                sensors see you and move your limbs slowly.</p>
+            <h2 class="card-title">Sensor alignment</h2>
+            <p class="desc">Teaches two sensors where they are relative to each other.
+                Stand where both can see you and slowly move your arms and legs,
+                like you're wading through water.</p>
             <label class="field" for="pair-ref">Reference sensor</label>
             <select id="pair-ref"></select>
-            <label class="field" for="pair-target">Target sensor</label>
+            <label class="field" for="pair-target">Sensor to align</label>
             <select id="pair-target"></select>
             <div class="wiz-phase" id="pair-phase"></div>
             <div class="bar"><div class="bar-fill" id="pair-bar"></div></div>
             <div class="rmse-block" id="pair-rmse-block" hidden>
+                <span class="stars" id="pair-stars" aria-hidden="true"></span>
                 <span class="rmse-num"><span id="pair-rmse">--</span><span
                     class="unit">cm</span></span>
                 <span class="chip" id="pair-verdict">--</span>
@@ -780,31 +729,34 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
             <p class="wiz-msg" id="pair-msg"></p>
             <div class="wiz-actions">
                 <button class="btn btn-primary" type="button" id="pair-start">
-                    Start pair calibration</button>
+                    Start alignment</button>
             </div>
-            <p class="hint" id="pair-hint" hidden>Needs at least two sensors.</p>
+            <p class="hint" id="pair-hint" hidden>Needs at least two sensors. With one
+                sensor you can skip this.</p>
         </div>
 
         <div class="card span4 wizard" id="wiz-body">
-            <h2 class="card-title">Body model</h2>
-            <p class="desc">Measures your bone lengths. Stand in view, arms slightly out,
-                and move gently for the capture.</p>
-            <label class="field" for="body-seconds">Capture seconds</label>
+            <h2 class="card-title">Body measurements</h2>
+            <p class="desc">Measures your limb lengths so the skeleton fits you.
+                Stand in view with your arms slightly out and sway gently until
+                the bar fills.</p>
+            <label class="field" for="body-seconds">Capture length (seconds)</label>
             <input type="number" id="body-seconds" min="5" max="120" step="1" value="15">
             <div class="wiz-phase" id="body-phase"></div>
             <div class="bar"><div class="bar-fill" id="body-bar"></div></div>
             <p class="wiz-msg" id="body-msg"></p>
             <div class="wiz-actions">
                 <button class="btn btn-primary" type="button" id="body-start">
-                    Run body capture</button>
+                    Measure me</button>
             </div>
         </div>
 
         <div class="card span4 wizard" id="wiz-playspace">
-            <h2 class="card-title">Playspace anchor</h2>
-            <p class="desc">Aligns Marionette with the SteamVR playspace. Hold a tracked
-                controller and move it through wide, slow arcs.</p>
-            <label class="field" id="hand-label">Controller hand</label>
+            <h2 class="card-title">Playspace sync</h2>
+            <p class="desc">Lines Marionette's world up with SteamVR's. Hold a
+                controller and sweep it through big, slow arcs, like painting
+                a wall. SteamVR setups only.</p>
+            <label class="field" id="hand-label">Which hand holds the controller?</label>
             <div class="seg" role="group" aria-labelledby="hand-label">
                 <button class="seg-btn" type="button" data-hand="left"
                     aria-pressed="false">Left</button>
@@ -816,19 +768,19 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
             <p class="wiz-msg" id="ps-msg"></p>
             <div class="wiz-actions">
                 <button class="btn btn-primary" type="button" id="ps-start">
-                    Run playspace calibration</button>
+                    Sync playspace</button>
             </div>
-            <p class="hint" id="ps-hint" hidden>Requires the SteamVR client build plus
-                SteamVR running.</p>
+            <p class="hint" id="ps-hint" hidden>Needs SteamVR running, and a Marionette
+                build with SteamVR support.</p>
         </div>
     </div>
 </section>
 
-<!-- ===== Events ===== -->
-<section id="panel-events" class="panel" aria-label="Events" hidden>
+<!-- ===== Log ===== -->
+<section id="panel-events" class="panel" aria-label="Log" hidden>
     <div class="card ev-card">
         <div class="ev-head">
-            <h2 class="overline">Events</h2>
+            <h2 class="overline">Log</h2>
             <button class="pill-btn" type="button" data-level="debug" aria-pressed="true">
                 debug<span class="cnt" id="pc-debug">0</span></button>
             <button class="pill-btn" type="button" data-level="info" aria-pressed="true">
@@ -838,103 +790,105 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
             <button class="pill-btn p-error" type="button" data-level="error"
                 aria-pressed="true">error<span class="cnt" id="pc-error">0</span></button>
             <button class="pill-btn follow-btn" type="button" id="ev-follow"
-                aria-pressed="true">auto-follow</button>
+                aria-pressed="true">follow new</button>
         </div>
         <div class="ev-list" id="ev-list" role="log" aria-label="Event log"></div>
-        <div class="empty-note" id="ev-empty">No events yet.</div>
+        <div class="empty-note" id="ev-empty">Nothing yet. If something needs your
+            attention, it shows up here.</div>
     </div>
 </section>
 
-<!-- ===== Tutorial ===== -->
-<section id="panel-tutorial" class="panel" aria-label="Tutorial" hidden>
+<!-- ===== Guide ===== -->
+<section id="panel-tutorial" class="panel" aria-label="Guide" hidden>
     <div class="card welcome-banner" id="tut-welcome" hidden>
         <div class="grow">
-            <h2 class="card-title">Welcome to Marionette</h2>
-            <p>First time here? This short tour takes you from sensor placement to
-                trackers on your body. Your progress is saved.</p>
+            <h2 class="card-title">New here?</h2>
+            <p>This guide takes you from an empty room to trackers on your body in
+                about 15 minutes. Your place is saved as you go.</p>
         </div>
-        <button class="btn btn-ghost" type="button" id="tut-dismiss">Dismiss</button>
+        <button class="btn btn-ghost" type="button" id="tut-dismiss">Skip for now</button>
     </div>
 
     <div class="tut-wrap">
-        <nav class="stepper glass" id="tut-stepper" aria-label="Tutorial steps">
+        <nav class="stepper glass" id="tut-stepper" aria-label="Guide steps">
             <button class="step-btn" type="button" data-step="1">
-                <span class="step-ix">1</span><span>Welcome</span></button>
+                <span class="step-ix">1</span><span>What is this?</span></button>
             <button class="step-btn" type="button" data-step="2">
-                <span class="step-ix">2</span><span>Choose your path</span></button>
+                <span class="step-ix">2</span><span>Pick your path</span></button>
             <button class="step-btn" type="button" data-step="3">
-                <span class="step-ix">3</span><span>Place your sensors</span></button>
+                <span class="step-ix">3</span><span>Place sensors</span></button>
             <button class="step-btn" type="button" data-step="4">
-                <span class="step-ix">4</span><span>See yourself</span></button>
+                <span class="step-ix">4</span><span>Calibrate</span></button>
             <button class="step-btn" type="button" data-step="5">
-                <span class="step-ix">5</span><span>Calibrate</span></button>
-            <button class="step-btn" type="button" data-step="6">
-                <span class="step-ix">6</span><span>Connect headset</span></button>
-            <button class="step-btn" type="button" data-step="7">
-                <span class="step-ix">7</span><span>Done</span></button>
+                <span class="step-ix">5</span><span>Connect &amp; play</span></button>
         </nav>
 
         <div class="card tut-card">
 
             <div class="tut-page" data-step="1">
-                <h2>Welcome to Marionette</h2>
-                <p class="tut-lede">Marionette turns one or more Kinect sensors into
-                    full-body tracking for VR. Each sensor watches you from a different
-                    angle; the fusion engine merges every view into one stable skeleton
-                    and streams tracker poses to SteamVR or straight to a Quest headset
-                    over Wi-Fi.</p>
+                <h2>What Marionette does</h2>
+                <p class="tut-lede">Marionette turns Kinect sensors, the old Xbox
+                    cameras, into full-body tracking for VR. Point one or two at your
+                    play space and your hips, knees, and feet follow you into the
+                    game. No suits, no straps, nothing to wear.</p>
                 <svg class="flow-svg" viewBox="0 0 640 230" role="img"
-                    aria-label="Dataflow diagram: sensors feed fusion, fusion feeds
-                    SteamVR and Quest">
+                    aria-label="Diagram: each Kinect watches you, Marionette merges
+                    the views into one skeleton and sends it to SteamVR or Quest">
                     <g class="flow-box"><rect x="14" y="34" width="120" height="52"
                         rx="12"/><text x="74" y="57">Kinect A</text>
-                        <text class="s" x="74" y="74">capture thread</text></g>
+                        <text class="s" x="74" y="74">sees your front</text></g>
                     <g class="flow-box"><rect x="14" y="142" width="120" height="52"
                         rx="12"/><text x="74" y="165">Kinect B</text>
-                        <text class="s" x="74" y="182">capture thread</text></g>
+                        <text class="s" x="74" y="182">sees your back</text></g>
                     <path class="flow" d="M134 60 C 192 60, 198 100, 250 106"/>
                     <path class="flow" d="M134 168 C 192 168, 198 128, 250 122"/>
                     <g class="flow-box hub"><rect x="250" y="88" width="130" height="52"
-                        rx="12"/><text x="315" y="111">Fusion</text>
-                        <text class="s" x="315" y="128">one world skeleton</text></g>
+                        rx="12"/><text x="315" y="111">Marionette</text>
+                        <text class="s" x="315" y="128">one solid skeleton</text></g>
                     <path class="flow" d="M380 106 C 438 100, 444 60, 500 60"/>
                     <path class="flow" d="M380 122 C 438 128, 444 168, 500 168"/>
                     <g class="flow-box"><rect x="500" y="34" width="126" height="52"
                         rx="12"/><text x="563" y="57">SteamVR</text>
-                        <text class="s" x="563" y="74">driver trackers</text></g>
+                        <text class="s" x="563" y="74">PCVR games</text></g>
                     <g class="flow-box"><rect x="500" y="142" width="126" height="52"
                         rx="12"/><text x="563" y="165">Quest</text>
-                        <text class="s" x="563" y="182">VRChat OSC</text></g>
+                        <text class="s" x="563" y="182">VRChat over Wi-Fi</text></g>
                 </svg>
-                <p class="tut-note">Opposed viewpoints structurally remove the two classic
-                    single-Kinect failures: front/back flips and self-occlusion
-                    dropouts.</p>
+                <p class="tut-note">Why two sensors? A camera behind you means your
+                    skeleton doesn't flip when you turn around, and your arms don't
+                    vanish when they pass behind your back. One sensor works for
+                    front-facing play.</p>
+                <p class="tut-note">No Kinect plugged in yet? Run
+                    <code>marionette run -c config/demo.json</code> to get a practice
+                    rig with two pretend sensors. Every step in this guide works
+                    against it, so you can learn the ropes before the hardware
+                    arrives.</p>
             </div>
 
             <div class="tut-page" data-step="2" hidden>
-                <h2>Choose your path</h2>
-                <p class="tut-lede">Two ways to get trackers into your game. You can run
-                    both endpoints at once, but pick one to set up first.</p>
+                <h2>Pick your path</h2>
+                <p class="tut-lede">Two ways to get the trackers into your game. You
+                    can run both at once later; pick one to start with.</p>
                 <div class="path-cards">
                     <div class="tile path-card">
                         <div class="path-head"><h3>Quest standalone</h3>
-                            <span class="chip chip-ok">simplest</span></div>
+                            <span class="chip chip-ok">easiest</span></div>
                         <ul>
-                            <li>VRChat OSC over Wi-Fi - no PCVR stream needed</li>
-                            <li>No SteamVR, no driver, no playspace calibration</li>
-                            <li>The PC only runs Marionette and the Kinects</li>
-                            <li>Up to 8 trackers; start with 3-point</li>
+                            <li>Talks straight to VRChat on the headset over Wi-Fi</li>
+                            <li>No SteamVR, no driver install, no playspace sync</li>
+                            <li>Your PC only runs Marionette and the Kinects</li>
+                            <li>Up to 8 trackers; hips + feet is plenty to start</li>
                         </ul>
                     </div>
                     <div class="tile path-card">
                         <div class="path-head"><h3>PCVR (SteamVR)</h3>
-                            <span class="chip">most compatible</span></div>
+                            <span class="chip">works everywhere</span></div>
                         <ul>
-                            <li>Works in any OpenVR app via ALVR, Virtual Desktop,
-                                Link, or a wired headset</li>
-                            <li>Trackers appear as real SteamVR devices (MN-*)</li>
+                            <li>Trackers show up as real SteamVR hardware, so any
+                                PCVR game that supports trackers can use them</li>
+                            <li>Works over ALVR, Virtual Desktop, Link, or a cable</li>
                             <li>Needs a one-time driver install and a playspace
-                                anchor calibration</li>
+                                sync</li>
                         </ul>
                     </div>
                 </div>
@@ -942,9 +896,10 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
 
             <div class="tut-page" data-step="3" hidden>
                 <h2>Place your sensors</h2>
-                <p class="tut-lede">Mount sensors at head height (1.6-2.0 m), tilted
-                    slightly down, with the play-area center 2-3.5 m away. Depth noise
-                    grows with range - past about 4 m a sensor contributes little.</p>
+                <p class="tut-lede">Put each sensor at about head height, tilted
+                    slightly down, 2 to 3.5 meters from where you'll stand. Closer is
+                    sharper. Past 4 meters a sensor can't see enough detail to
+                    help.</p>
                 <div class="seg" role="group" aria-label="Sensor count" id="room-seg">
                     <button class="seg-btn" type="button" data-count="1"
                         aria-pressed="false">1 sensor</button>
@@ -980,69 +935,59 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
                 </svg>
                 <p class="room-note" id="room-note"></p>
                 <ul class="rules">
-                    <li><strong>One Kinect v2 per PC</strong> - a hard SDK limit
-                        (multiple v1s can share a PC).</li>
-                    <li><strong>Never overlap two Kinect v1s</strong> - their projected
-                        IR dot patterns interfere badly. A v1 + v2 mix is clean, as is
-                        v2 + v2.</li>
-                    <li><strong>One USB3 controller per v2</strong> when planning
-                        multi-v2 rigs - separate PCIe USB3 cards, not one card's
-                        ports.</li>
-                    <li>Mount rigidly: a bumped tripod means redoing pair calibration
-                        for that sensor.</li>
+                    <li><strong>One Kinect v2 per PC.</strong> The Microsoft SDK
+                        allows exactly one. Older v1 sensors don't have this limit.</li>
+                    <li><strong>Don't aim two v1 sensors at the same spot.</strong>
+                        Their infrared patterns scramble each other. Mixing a v1 with
+                        a v2 is fine, and so is v2 + v2.</li>
+                    <li><strong>Mount them so they can't move.</strong> A bumped
+                        tripod means redoing alignment for that sensor.</li>
                 </ul>
             </div>
 
             <div class="tut-page" data-step="4" hidden>
-                <h2>See yourself</h2>
-                <p class="tut-lede">Open the Skeleton tab to watch the live fused body:
-                    front and top-down views, sensor positions, and the tracker
-                    diamonds being streamed out. If the skeleton is solid while you
-                    turn in place, the rig is healthy.</p>
+                <h2>Calibrate</h2>
+                <p class="tut-lede">Quick check first: open the Skeleton tab and move
+                    around. If the figure moves when you move, your sensors are
+                    working.</p>
                 <div class="wiz-actions">
-                    <button class="btn btn-primary" type="button" data-go="skeleton">
+                    <button class="btn btn-ghost" type="button" data-go="skeleton">
                         Open the Skeleton tab</button>
                 </div>
-                <p class="tut-note">No hardware yet? Run
-                    <code>marionette run -c config/demo.json</code> - two synthetic
-                    sensors through the real fusion pipeline. A zero-hardware dry run
-                    of everything on this dashboard.</p>
-            </div>
-
-            <div class="tut-page" data-step="5" hidden>
-                <h2>Calibrate - in this order</h2>
+                <p class="tut-lede">Then run the calibration steps, in this order:</p>
                 <ol class="cal-steps">
-                    <li><strong>Pair alignment</strong>
-                        <span class="chip" id="tut-pair-chip">multi-sensor rigs</span> -
-                        aligns each extra sensor to the reference. Stand in the overlap
-                        and move your limbs slowly; accept under 2-3 cm RMSE.</li>
-                    <li><strong>Body model</strong> - a 15-30 s capture of your bone
-                        lengths. Redo it per person, not per session.</li>
-                    <li><strong>Playspace anchor</strong>
-                        <span class="chip">PCVR only</span> - aligns Marionette's world
-                        with the SteamVR playspace using a tracked controller. The OSC
-                        path never needs it.</li>
+                    <li><strong>Sensor alignment</strong>
+                        <span class="chip" id="tut-pair-chip">2+ sensors</span> -
+                        stand where both sensors see you and move slowly. Aim for
+                        three stars; two is fine. One-sensor rigs skip this.</li>
+                    <li><strong>Body measurements</strong> - a 15-second capture of
+                        your proportions. Redo it when a new person uses the rig,
+                        not every session.</li>
+                    <li><strong>Playspace sync</strong>
+                        <span class="chip">SteamVR only</span> - hold a controller
+                        and sweep big, slow arcs. Quest-only setups never need
+                        this.</li>
                 </ol>
                 <div class="wiz-actions">
                     <button class="btn btn-primary" type="button" data-go="calibration">
-                        Open the Calibration tab</button>
+                        Open the Calibrate tab</button>
                 </div>
             </div>
 
-            <div class="tut-page" data-step="6" hidden>
-                <h2>Connect your headset</h2>
+            <div class="tut-page" data-step="5" hidden>
+                <h2>Connect and play</h2>
                 <div class="path-cards">
                     <div class="tile path-card">
-                        <div class="path-head"><h3>Quest - VRChat OSC</h3></div>
+                        <div class="path-head"><h3>Quest - VRChat</h3></div>
                         <ol>
-                            <li>Find the headset IP: Settings &gt; Wi-Fi &gt; your
-                                network &gt; details. A static DHCP lease helps.</li>
-                            <li>Point the <code>osc</code> endpoint at it: host = the
-                                headset IP, port <span class="num">9000</span>.</li>
+                            <li>Find the headset's IP address: Settings &gt; Wi-Fi
+                                &gt; your network &gt; details.</li>
+                            <li>In your config, point the <code>osc</code> output at
+                                that IP, port <span class="num">9000</span>.</li>
                             <li>In VRChat: Action Menu &gt; Options &gt; OSC &gt;
                                 Enabled.</li>
-                            <li>Run Marionette, then run VRChat's FBT calibration
-                                (stand straight, arms out, confirm).</li>
+                            <li>Start Marionette, then run VRChat's FBT calibration:
+                                stand straight, arms out, confirm.</li>
                         </ol>
                     </div>
                     <div class="tile path-card">
@@ -1050,53 +995,46 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
                             <span class="chip chip-warn" id="ovr-tag" hidden>not built
                                 in this binary</span></div>
                         <ol>
-                            <li>Register the driver once with
+                            <li>Install the driver once:
                                 <code>scripts/install-driver.ps1</code> (or
-                                <code>.sh</code>).</li>
-                            <li>Add the <code>openvr</code> endpoint
+                                <code>.sh</code> on Linux).</li>
+                            <li>Add the <code>openvr</code> output
                                 (127.0.0.1:24190) to your config.</li>
-                            <li>Start SteamVR via ALVR / Virtual Desktop / Link, then
-                                run Marionette. Trackers appear as MN-WAIST, MN-LFOOT,
-                                and so on.</li>
-                            <li>Assign roles: SteamVR &gt; Settings &gt; Controllers
-                                &gt; Manage Trackers. SteamVR remembers per serial.</li>
-                            <li>Quest 2: lower the video bitrate in ALVR / Virtual
-                                Desktop. Tracker data is tiny - the video stream is
-                                what competes for bandwidth.</li>
+                            <li>Start SteamVR, then Marionette. Trackers show up
+                                named MN-WAIST, MN-LFOOT, and so on.</li>
+                            <li>Tell SteamVR where each one goes: Settings &gt;
+                                Controllers &gt; Manage Trackers. It remembers.</li>
+                            <li>Stuttering on Quest 2? Lower the video bitrate in
+                                ALVR or Virtual Desktop. The trackers themselves use
+                                almost no bandwidth.</li>
                         </ol>
                     </div>
                 </div>
-            </div>
-
-            <div class="tut-page" data-step="7" hidden>
-                <h2>You are set</h2>
-                <p class="tut-lede">Trackers should now sit on your body and stay there.
-                    Recalibrate only when something changes:</p>
+                <h3>Later on</h3>
                 <ul class="rules">
-                    <li>Sensor moved, bumped, or remounted -&gt; redo
-                        <strong>Pair</strong> for that sensor.</li>
-                    <li>Different person using the rig -&gt; redo the
-                        <strong>Body model</strong>.</li>
-                    <li>SteamVR room setup, playspace recenter, or a different
-                        streaming app -&gt; redo the <strong>Playspace anchor</strong>.
-                        Re-running it at session start is cheap insurance.</li>
-                    <li>Trackers drift or sit offset -&gt; anchor first; if turning in
-                        place doubles your limbs, redo Pair.</li>
+                    <li>Moved or bumped a sensor? Redo <strong>alignment</strong>
+                        for that one.</li>
+                    <li>Someone else playing? Redo
+                        <strong>body measurements</strong>.</li>
+                    <li>Ran SteamVR room setup or switched streaming apps? Redo the
+                        <strong>playspace sync</strong>.</li>
+                    <li>Trackers drifting? Sync the playspace first. Limbs doubling
+                        when you spin? Redo alignment.</li>
                 </ul>
-                <p class="tut-lede">Watch the <strong>Events</strong> tab - warnings
-                    surface there first. The full reference lives in the repo's docs
-                    folder: USAGE.md and CALIBRATION.md.</p>
+                <p class="tut-lede">If something acts up, check the Log tab; problems
+                    show up there first. That's the whole setup. Have fun in
+                    there.</p>
                 <div class="wiz-actions">
                     <button class="btn btn-ghost" type="button" data-go="events">
-                        Open events</button>
+                        Open the log</button>
                     <button class="btn btn-primary" type="button" id="tut-finish">
-                        Finish tutorial</button>
+                        Finish</button>
                 </div>
             </div>
 
             <div class="tut-nav">
                 <button class="btn btn-ghost" type="button" id="tut-back">Back</button>
-                <span class="tut-progress" id="tut-progress">Step 1 of 7</span>
+                <span class="tut-progress" id="tut-progress">Step 1 of 5</span>
                 <button class="btn btn-primary" type="button" id="tut-next">Next</button>
             </div>
         </div>
@@ -1119,8 +1057,8 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
             <circle cx="12" cy="19" r="1" fill="#fb7185" stroke="none"/>
             <path d="M4 4l16 16" stroke="#fb7185"/>
         </svg>
-        <h2>Connection lost</h2>
-        <p>Marionette is not answering. Retrying in
+        <h2>Signal lost</h2>
+        <p>Marionette stopped answering. Is it still running? Retrying in
             <span class="num" id="veil-count">5</span> s.</p>
         <button class="btn btn-ghost" type="button" id="veil-retry">Retry now</button>
     </div>
@@ -1248,9 +1186,9 @@ function epIcon(type) {
         '<circle cx="5" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg>';
 }
 function epDesc(type) {
-    if (type === "osc") return "VRChat OSC trackers over UDP";
-    if (type === "openvr") return "SteamVR driver bridge (UDP wire)";
-    return "custom endpoint";
+    if (type === "osc") return "VRChat on your headset, over Wi-Fi";
+    if (type === "openvr") return "SteamVR trackers on this PC";
+    return "custom output";
 }
 
 /* ---------------- state ---------------- */
@@ -1299,7 +1237,7 @@ function postJSON(url, payload) {
 function setPill(mode) {
     var dot = $("conn-dot"), txt = $("conn-text");
     dot.className = "dot" + (mode === "live" ? " live" : mode === "dead" ? " dead" : "");
-    txt.textContent = mode === "live" ? "Live" : mode === "dead" ? "Offline" : "Connecting";
+    txt.textContent = mode === "live" ? "Online" : mode === "dead" ? "Offline" : "Connecting";
 }
 function showVeil() { $("veil").hidden = false; }
 function hideVeil() { $("veil").hidden = true; }
@@ -1333,6 +1271,7 @@ function statusLoop() {
 /* ---------------- overview rendering ---------------- */
 var nodeCards = {};   /* id -> element refs */
 var epSig = "";
+var questSig = "";
 
 function applyStatus(s) {
     if (!s || typeof s !== "object") return;
@@ -1366,7 +1305,8 @@ function applyStatus(s) {
 
     renderNodes(Array.isArray(s.nodes) ? s.nodes : []);
     renderEndpoints(Array.isArray(s.endpoints) ? s.endpoints : []);
-    renderCalSummary(s.calibration || {});
+    updateReady(s);
+    renderChecklist(s);
     if (s.events && typeof s.events === "object") {
         updateCounts({
             debug: state.counts.debug, info: state.counts.info,
@@ -1420,7 +1360,7 @@ function renderNodes(nodes) {
         c.fps.textContent = fmt1(Number(n.fps));
         c.age.textContent = fmtAge(Number(n.last_frame_age_s));
         var hb = !!n.has_body;
-        c.body.textContent = hb ? "body" : "no body";
+        c.body.textContent = hb ? "sees you" : "nobody in view";
         c.body.className = "chip " + (hb ? "chip-ok" : "");
         var rs = Number(n.restarts) || 0;
         c.restarts.textContent = fmtInt(rs) + (rs === 1 ? " restart" : " restarts");
@@ -1454,16 +1394,111 @@ function renderEndpoints(eps) {
     $("ep-empty").hidden = eps.length > 0;
 }
 
-function renderCalSummary(cal) {
+/* Plain-language headline: the one line a first-time user reads. */
+function updateReady(s) {
+    var pipe = s.pipeline || {};
+    var nodes = Array.isArray(s.nodes) ? s.nodes : [];
+    var trackers = Array.isArray(s.trackers) ? s.trackers : [];
+    var i, live = 0, anyBody = false, valid = 0;
+    for (i = 0; i < nodes.length; i++) {
+        if (nodes[i].running) live++;
+        if (nodes[i].has_body) anyBody = true;
+    }
+    for (i = 0; i < trackers.length; i++) if (trackers[i].valid) valid++;
+    var cls = "ready-line", text, hint;
+    if (!pipe.running) {
+        text = "Paused";
+        hint = "The tracking pipeline isn't running.";
+        cls += " bad";
+    } else if (nodes.length === 0) {
+        text = "No sensors yet";
+        hint = "Add sensors to your config, or try the practice rig in the guide.";
+        cls += " bad";
+    } else if (live === 0) {
+        text = "Sensors offline";
+        hint = "Nothing is sending frames. Check cables and power, then see the log.";
+        cls += " bad";
+    } else if (anyBody) {
+        text = "Tracking you";
+        hint = valid > 0
+            ? valid + (valid === 1 ? " tracker" : " trackers") + " live in your game."
+            : "Body locked. No output is receiving trackers yet.";
+        cls += " good";
+    } else {
+        text = "Ready when you are";
+        hint = "Sensors are up. Step into view to be tracked.";
+    }
+    var lineNode = $("ready-line");
+    lineNode.className = cls;
+    lineNode.textContent = text;
+    $("ready-sub").textContent = hint;
+}
+
+/* Quest-log style setup checklist, derived entirely from /api/status. */
+function renderChecklist(s) {
+    var nodes = Array.isArray(s.nodes) ? s.nodes : [];
+    var eps = Array.isArray(s.endpoints) ? s.endpoints : [];
+    var cal = s.calibration || {};
+    var i, live = 0, hasOpenvr = false;
+    for (i = 0; i < nodes.length; i++) if (nodes[i].running) live++;
+    for (i = 0; i < eps.length; i++) if (String(eps[i].type) === "openvr") hasOpenvr = true;
     var ext = Array.isArray(cal.extrinsics) ? cal.extrinsics.length : 0;
-    $("cal-ext").textContent = String(ext) + (ext === 1 ? " sensor" : " sensors");
-    var b = $("cal-body");
-    b.textContent = cal.body_model_valid ? "calibrated" : "not set";
-    b.className = "chip " + (cal.body_model_valid ? "chip-ok" : "");
-    var a = $("cal-anchor");
-    a.textContent = cal.world_anchor_set ? "set" : "not set";
-    a.className = "chip " + (cal.world_anchor_set ? "chip-ok" : "");
-    $("cal-file").textContent = cal.file ? String(cal.file) : "--";
+    var items = [{
+        label: "Sensors sending frames",
+        detail: nodes.length ? live + " / " + nodes.length : "none yet",
+        done: nodes.length > 0 && live === nodes.length,
+        go: nodes.length ? null : "tutorial"
+    }];
+    if (nodes.length > 1) {
+        items.push({
+            label: "Sensors aligned to each other",
+            detail: Math.min(ext, nodes.length) + " / " + nodes.length,
+            done: ext >= nodes.length,
+            go: "calibration"
+        });
+    }
+    items.push({
+        label: "Body measured",
+        detail: cal.body_model_valid ? "saved" : "not yet",
+        done: !!cal.body_model_valid,
+        go: "calibration"
+    });
+    items.push({
+        label: "Game output connected",
+        detail: eps.length ? "" : "none yet",
+        done: eps.length > 0,
+        go: null
+    });
+    if (hasOpenvr) {
+        items.push({
+            label: "Playspace synced with SteamVR",
+            detail: cal.world_anchor_set ? "saved" : "not yet",
+            done: !!cal.world_anchor_set,
+            go: "calibration"
+        });
+    }
+    var sig = JSON.stringify(items);
+    if (sig === questSig) return;
+    questSig = sig;
+    var list = $("quest-list");
+    list.textContent = "";
+    var doneCount = 0;
+    for (i = 0; i < items.length; i++) {
+        var it = items[i];
+        if (it.done) doneCount++;
+        var row = el("div", { class: "q-row" + (it.done ? " done" : "") },
+            el("span", { class: "q-box", "aria-hidden": "true" }, "✓"),
+            el("span", { class: "q-label" }, it.label),
+            it.detail ? el("span", { class: "q-detail num" }, it.detail) : null);
+        if (!it.done && it.go) {
+            row.appendChild(el("button",
+                { class: "q-go", type: "button", "data-go": it.go }, "fix"));
+        }
+        list.appendChild(row);
+    }
+    var qc = $("quest-count");
+    qc.textContent = doneCount + " / " + items.length;
+    qc.className = "chip num" + (doneCount === items.length ? " chip-ok" : "");
 }
 
 /* ---------------- skeleton view ---------------- */
@@ -1852,6 +1887,10 @@ function calibLoop() {
     });
 }
 
+var KIND_NAMES = {
+    pair: "sensor alignment", body: "body measurements", playspace: "playspace sync"
+};
+
 function applyCalib(cs) {
     if (!cs || typeof cs !== "object") return;
     var active = !!cs.active;
@@ -1865,7 +1904,8 @@ function applyCalib(cs) {
         var frac = needed > 0 ? done / needed : 0;
         var ptext = String(cs.phase || "working") +
             (needed > 0 ? "  " + done + " / " + needed : "");
-        head.textContent = "Running " + state.calibKind + " - " + ptext;
+        head.textContent = "Running " +
+            (KIND_NAMES[state.calibKind] || state.calibKind) + " - " + ptext;
         if (state.calibKind === "pair") {
             setBar("pair-bar", "pair-phase", frac, ptext);
             $("pair-rmse-block").hidden = true;
@@ -1879,7 +1919,7 @@ function applyCalib(cs) {
         }
         return;
     }
-    head.textContent = "Idle. One job runs at a time.";
+    head.textContent = "Nothing running. Pick a step below, one at a time.";
     if (!cs.done || !state.calibKind) return;
     /* finished result available until the next job starts */
     var ok = !!cs.ok;
@@ -1891,19 +1931,25 @@ function applyCalib(cs) {
             $("pair-rmse-block").hidden = false;
             $("pair-rmse").textContent = fmt1(rmse);
             var v = $("pair-verdict"), adv = $("pair-advice");
+            var stars = $("pair-stars");
             if (rmse < 2) {
-                v.textContent = "excellent";
+                stars.textContent = "★★★";
+                v.textContent = "locked in";
                 v.className = "chip chip-ok";
-                adv.textContent = "RMSE under 2 cm. The pair is well aligned.";
+                adv.textContent = "Under 2 cm of drift between sensors. " +
+                    "As good as it gets.";
             } else if (rmse < 3) {
-                v.textContent = "ok";
+                stars.textContent = "★★☆";
+                v.textContent = "good";
                 v.className = "chip chip-warn";
-                adv.textContent = "Acceptable. The filter absorbs the rest.";
+                adv.textContent = "Close enough to play. The smoothing filter " +
+                    "covers the rest.";
             } else {
-                v.textContent = "redo";
+                stars.textContent = "★☆☆";
+                v.textContent = "run it back";
                 v.className = "chip chip-err";
-                adv.textContent = "Too high. Move slower, stand closer, and cover " +
-                    "more of the overlap volume, then run it again.";
+                adv.textContent = "Too loose. Move slower, stand a bit closer, " +
+                    "cover more of the shared view, then try again.";
             }
             wizMsg("pair-msg", msg, "ok");
         } else {
@@ -2044,14 +2090,6 @@ function updateCounts(counts) {
     $("pc-info").textContent = fmtInt(c.info);
     $("pc-warn").textContent = fmtInt(c.warn);
     $("pc-error").textContent = fmtInt(c.error);
-    $("ec-debug").textContent = fmtInt(c.debug);
-    $("ec-info").textContent = fmtInt(c.info);
-    var w = $("ec-warn");
-    w.textContent = fmtInt(c.warn);
-    w.className = "chip num " + (c.warn > 0 ? "chip-warn" : "");
-    var e = $("ec-error");
-    e.textContent = fmtInt(c.error);
-    e.className = "chip num " + (c.error > 0 ? "chip-err" : "");
     var total = c.debug + c.info + c.warn + c.error;
     $("badge-total").textContent = fmtInt(total) + (total === 1 ? " event" : " events");
     $("badge-warn").hidden = c.warn === 0;
@@ -2067,14 +2105,14 @@ function applyFilter() {
     }
 }
 
-/* ---------------- tutorial ---------------- */
+/* ---------------- guide ---------------- */
 var ROOM_NOTES = {
-    1: "One sensor covers the front arc only. Fine for seated or front-facing play; " +
-        "turning away will occlude joints and the skeleton will degrade.",
-    2: "Two opposing sensors cover most of 360 degrees - the recommended starting " +
-        "rig. Opposed views remove front/back flips and occlusion dropouts.",
-    3: "A third sensor at a 90-degree offset fills the side gaps. Calibrate each " +
-        "added sensor against the reference (it needs view overlap with it)."
+    1: "One sensor sees you from the front. Fine for seated or front-facing play; " +
+        "turn away from it and it loses your arms.",
+    2: "Two sensors facing each other cover you from nearly every angle. This is " +
+        "the sweet spot; start here if you have two.",
+    3: "A third sensor off to the side fills in the last gaps. Align each new " +
+        "sensor against the reference; their views need to overlap."
 };
 
 function roomSet(count) {
@@ -2090,7 +2128,7 @@ function roomSet(count) {
 }
 
 function tutGo(step) {
-    step = Math.max(1, Math.min(7, step | 0));
+    step = Math.max(1, Math.min(5, step | 0));
     state.tutStep = step;
     lsSet("mn.tutorial.step", String(step));
     var pages = document.querySelectorAll(".tut-page");
@@ -2104,9 +2142,9 @@ function tutGo(step) {
         else btns[i].removeAttribute("aria-current");
         btns[i].classList.toggle("done", n < step);
     }
-    $("tut-progress").textContent = "Step " + step + " of 7";
+    $("tut-progress").textContent = "Step " + step + " of 5";
     $("tut-back").disabled = step === 1;
-    $("tut-next").hidden = step === 7;
+    $("tut-next").hidden = step === 5;
 }
 
 function tutFinish() {

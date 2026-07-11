@@ -19,12 +19,13 @@ Strings from above, moving a body.
     Virtual Desktop, Steam Link, Quest Link for Quest 2/3 PCVR).
   - **VRChat OSC Trackers**: direct to the headset over LAN, no PCVR stream required
     (Quest standalone).
-- Serves a local web dashboard at http://127.0.0.1:8211 while running: live skeleton view,
-  pipeline status, event feed, calibration wizards, and an onboarding tutorial.
+- Serves a local web dashboard at http://127.0.0.1:8211 while running: plain-language
+  status and setup checklist, live skeleton view, calibration wizards, event log, and a
+  built-in 5-step guide.
 - `marionette doctor` health-checks the whole stack (backends, sensors, config,
   calibration, ports, SteamVR driver registration), with `--json` for scripts.
 - Self-heals at runtime: a watchdog recreates and restarts capture nodes that go silent,
-  and structured warning/error events are tracked in-process (dashboard Events tab).
+  and structured warning/error events are tracked in-process (dashboard Log tab).
 
 ## Layout
 
@@ -40,12 +41,13 @@ Strings from above, moving a body.
 | `server/` | Web dashboard: embedded UI + JSON API (cpp-httplib) |
 | `web/` | The dashboard's single-file UI (`index.html`, embedded at build time) |
 | `app/` | `marionette` CLI: run, record, calibrate, doctor |
-| `docs/` | Design, build, usage, calibration, tutorial, dashboard API |
+| `docs/` | Design, build, usage, calibration, tutorial, classroom/lab guide, dashboard API |
 
 ## Quick start
 
 See [docs/BUILD.md](docs/BUILD.md) and [docs/USAGE.md](docs/USAGE.md); first time,
-start with [docs/TUTORIAL.md](docs/TUTORIAL.md).
+start with [docs/TUTORIAL.md](docs/TUTORIAL.md). Setting up a station for a class,
+club, or teaching lab: [docs/CLASSROOM.md](docs/CLASSROOM.md).
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
