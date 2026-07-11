@@ -64,11 +64,11 @@ Tabs:
 
 | Tab | What it shows |
 |---|---|
-| **Overview** | Pipeline counters (frames in, fused %, trackers out), per-node cards (fps, last-frame age, body, watchdog restarts, last error), endpoint list, calibration summary |
+| **Home** | Plain-language status headline, setup checklist, pipeline counters (frames in, fused %, trackers out), per-node cards (fps, last-frame age, body, watchdog restarts, last error), output list |
 | **Skeleton** | Live fused body (front + top-down), sensor positions/view directions, tracker diamonds; polls ~15 Hz |
-| **Calibration** | Guided wizards for pair / body / playspace with live progress and RMSE; one job at a time |
-| **Events** | Structured warning/error feed from the in-process event log, filterable by level |
-| **Tutorial** | Interactive 7-step onboarding (standalone copy: [TUTORIAL.md](TUTORIAL.md)); opens automatically on first visit |
+| **Calibrate** | Guided wizards for pair / body / playspace with live progress and a star rating from RMSE; one job at a time |
+| **Log** | Structured warning/error feed from the in-process event log, filterable by level |
+| **Guide** | Interactive 5-step onboarding (standalone copy: [TUTORIAL.md](TUTORIAL.md)); opens automatically on first visit |
 
 Control it per run:
 
@@ -169,7 +169,7 @@ shown:
 
 The watchdog recreates and restarts a capture node that stops delivering
 frames (see [DESIGN.md](DESIGN.md#watchdog)); restarts show up per node on the
-dashboard Overview tab and in the events feed. Outlier rejection downweights a
+dashboard Home tab and in the log. Outlier rejection downweights a
 sensor whose joint sample disagrees with the consensus of the other sensors
 (see [DESIGN.md](DESIGN.md#outlier-rejection)) - the usual culprit is a
 bumped, miscalibrated sensor.

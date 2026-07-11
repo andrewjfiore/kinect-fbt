@@ -174,7 +174,7 @@ is built from the same `NodeConfigEntry` via the `NodeRegistry`, and
 `backoff_seconds` per node and capped at `max_restarts` per node per run;
 a node that exhausts its budget stays down (the rig keeps running without
 it). Restart counts surface in `Pipeline::nodeStatuses()` (dashboard
-Overview tab) and each restart logs a warning into the event log.
+Home tab) and each restart logs a warning into the event log.
 
 Lifetime consequence: because the watchdog re-invokes factories at any point
 during a run, **the `NodeRegistry` and `EndpointRegistry` passed to
