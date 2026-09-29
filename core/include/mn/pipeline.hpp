@@ -87,6 +87,16 @@ public:
     // calibration). Returns false for unknown node ids.
     bool applyNodeExtrinsic(const std::string& nodeId, const Pose& extrinsic);
 
+    // Projection correction (axis flips + left/right swap) applied to every
+    // fused frame before it is mapped to trackers. Thread-safe; a change takes
+    // effect on the next tick. Seeded from the CalibrationStore at build().
+    void setProjectionCorrection(const ProjectionCorrection& c);
+    ProjectionCorrection projectionCorrection() const;
+
+    // Validity probe of the most recent fused frame (finiteness, bounds, bone
+    // lengths, upright). evaluated=false until the first body is fused.
+    ProjectionCheck latestProjectionCheck() const;
+
     FusionEngine& fusion();
     const std::vector<std::unique_ptr<ICaptureNode>>& captureNodes() const;
 

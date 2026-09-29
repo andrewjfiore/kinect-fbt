@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# marionette-launch - start Marionette and let it open the dashboard.
+#
+# Used by the desktop entry (Terminal=false) and as the AppImage entry point.
+# Sets up a per-user data directory the first time it runs; the app opens the
+# dashboard in the browser itself, so launching never needs a terminal.
+set -euo pipefail
+
+# Directory this launcher lives in (resolved through symlinks). Under AppImage
+# the runtime also exports $APPDIR pointing at the mounted payload.
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+here="$(cd "$(dirname "$self")" && pwd)"
+root="${APPDIR:-$here}"
+
+bin=""
+for candidate in "$root/marionette" "$root/usr/bin/marionette" "$here/marionette"; do
+    if [ -x "$candidate" ]; then bin="$candidate"; break; fi
+done
+if [ -z "$bin" ]; then
+    msg="Marionette binary not found next to the launcher."
+    command -v notify-send >/dev/null 2>&1 && notify-send "Marionette" "$msg" || echo "$msg" >&2
+    exit 1
+fi
+
+# Per-user, writable working directory for config + calibration.
+data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/marionette"
+mkdir -p "$data_dir"
+cfg="$data_dir/config.json"
+if [ ! -f "$cfg" ]; then
+    for c in "$root/config/demo.json" "$root/usr/share/marionette/config/demo.json" \
+             "$here/config/demo.json"; do
+        if [ -f "$c" ]; then cp "$c" "$cfg"; break; fi
+    done
+fi
+[ -f "$cfg" ] || cfg="$root/config/demo.json"
+
+cd "$data_dir"   # calibration.json is written relative to here
+exec "$bin" run -c "$cfg" "$@"
