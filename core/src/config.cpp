@@ -339,6 +339,7 @@ bool CalibrationStore::load(const std::string& path) {
         extrinsics_.clear();
         bodyModel_ = BodyModel{};
         worldAnchor_.reset();
+        projection_ = ProjectionCorrection{};
         return true;
     }
 
@@ -353,6 +354,7 @@ bool CalibrationStore::load(const std::string& path) {
         std::map<std::string, Pose> ext;
         BodyModel bm{};
         std::optional<Pose> anchor;
+        ProjectionCorrection proj;
 
         if (j.contains("extrinsics")) {
             const json& e = j.at("extrinsics");
@@ -390,10 +392,21 @@ bool CalibrationStore::load(const std::string& path) {
         if (j.contains("world_anchor"))
             anchor = j.at("world_anchor").get<Pose>();
 
+        if (j.contains("projection")) {
+            const json& pj = j.at("projection");
+            if (!pj.is_object())
+                return false;
+            proj.flipX = pj.value("flip_x", false);
+            proj.flipY = pj.value("flip_y", false);
+            proj.flipZ = pj.value("flip_z", false);
+            proj.swapLR = pj.value("swap_lr", false);
+        }
+
         // Commit only after the whole file parsed cleanly.
         extrinsics_ = std::move(ext);
         bodyModel_ = bm;
         worldAnchor_ = anchor;
+        projection_ = proj;
         return true;
     } catch (const std::exception&) {
         return false;
@@ -415,7 +428,12 @@ bool CalibrationStore::save(const std::string& path) const {
     }
 
     json j{{"extrinsics", ext},
-           {"body_model", {{"valid", bodyModel_.valid}, {"bone_lengths", bl}}}};
+           {"body_model", {{"valid", bodyModel_.valid}, {"bone_lengths", bl}}},
+           {"projection",
+            {{"flip_x", projection_.flipX},
+             {"flip_y", projection_.flipY},
+             {"flip_z", projection_.flipZ},
+             {"swap_lr", projection_.swapLR}}}};
     if (worldAnchor_)
         j["world_anchor"] = *worldAnchor_;
 

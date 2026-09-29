@@ -479,6 +479,30 @@ struct DashboardServer::Impl {
                     {"bones", bones},     {"sensors", sensors},    {"trackers", trackers}};
     }
 
+    json projectionJson() {
+        const ProjectionCorrection c = pipeline.projectionCorrection();
+        const ProjectionCheck k = pipeline.latestProjectionCheck();
+        return json{{"flip_x", c.flipX},
+                    {"flip_y", c.flipY},
+                    {"flip_z", c.flipZ},
+                    {"swap_lr", c.swapLR},
+                    {"check",
+                     {{"evaluated", k.evaluated},
+                      {"ok", k.ok()},
+                      {"finite", k.finite},
+                      {"in_bounds", k.inBounds},
+                      {"bones_plausible", k.bonesPlausible},
+                      {"upright_ok", k.uprightOk},
+                      {"tracked_joints", k.trackedJoints},
+                      {"non_finite_joints", k.nonFiniteJoints},
+                      {"out_of_bounds_joints", k.outOfBoundsJoints},
+                      {"implausible_bones", k.implausibleBones},
+                      {"worst_radius_m", k.worstRadiusMeters},
+                      {"worst_bone_error_m", k.worstBoneErrorMeters},
+                      {"head_above_hips_m", k.headAboveHipsMeters},
+                      {"summary", k.summary()}}}};
+    }
+
     json eventsJson(const httplib::Request& req) {
         uint64_t after = 0;
         if (req.has_param("after")) {
@@ -850,6 +874,45 @@ struct DashboardServer::Impl {
         sendOk(res);
     }
 
+    // POST /api/projection: update the axis-flip correction (all keys optional;
+    // unspecified keys keep their current value), apply it live to the pipeline,
+    // and persist it to the calibration store. Returns the new state + check.
+    void handleProjection(const httplib::Request& req, httplib::Response& res) {
+        json body;
+        std::string perr;
+        if (!parseBody(req, body, perr)) {
+            sendError(res, 400, perr);
+            return;
+        }
+        ProjectionCorrection c = pipeline.projectionCorrection();
+        const auto readBool = [&](const char* key, bool& out) -> bool {
+            if (!body.contains(key))
+                return true;
+            if (!body.at(key).is_boolean())
+                return false;
+            out = body.at(key).get<bool>();
+            return true;
+        };
+        if (!readBool("flip_x", c.flipX) || !readBool("flip_y", c.flipY) ||
+            !readBool("flip_z", c.flipZ) || !readBool("swap_lr", c.swapLR)) {
+            sendError(res, 400, "flip_x/flip_y/flip_z/swap_lr must be booleans");
+            return;
+        }
+
+        pipeline.setProjectionCorrection(c); // effective next tick
+        bool saved = false;
+        {
+            std::lock_guard<std::mutex> lk(storeMutex);
+            store.setProjection(c);
+            saved = store.save(calibPath);
+        }
+
+        json out = projectionJson();
+        out["ok"] = true; // applied live regardless of whether the save stuck
+        out["error"] = saved ? "" : ("applied live, but saving to " + calibPath + " failed");
+        sendJson(res, out);
+    }
+
     void handleCalibratePlayspace(const httplib::Request& req, httplib::Response& res) {
         if (!opt.playspace) {
             sendError(res, 501, "openvr client not built");
@@ -944,6 +1007,15 @@ struct DashboardServer::Impl {
 
         svr.Get("/api/doctor", [this](const httplib::Request&, httplib::Response& res) {
             sendJson(res, doctorJson());
+        });
+
+        svr.Get("/api/projection", [this](const httplib::Request&, httplib::Response& res) {
+            sendJson(res, projectionJson());
+        });
+
+        svr.Post("/api/projection", [this](const httplib::Request& req,
+                                           httplib::Response& res) {
+            handleProjection(req, res);
         });
 
         svr.Post("/api/calibrate/pair", [this](const httplib::Request& req,

@@ -32,5 +32,9 @@
 ## Phase 4 - polish
 - [x] GUI (status, placement viz, calibration wizard) - shipped early as the
       phase-2 web dashboard
-- [ ] Installer + SteamVR driver auto-registration
+- [x] Installer + SteamVR driver auto-registration - no-CLI Windows (Inno Setup)
+      and Linux (AppImage / tarball) installers, browser auto-open on launch,
+      release workflow (`installer/`, `.github/workflows/release.yml`)
+- [x] Projection validity check + one-click axis correction (Flip X/Y/Z, Swap
+      L/R) for mirrored / backwards / upside-down rigs
 - [ ] Quest 2 QoS presets (lower bitrate budgets, stronger prediction)

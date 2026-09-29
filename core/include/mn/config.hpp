@@ -4,6 +4,7 @@
 
 #include "mn/fusion.hpp"
 #include "mn/mapping.hpp"
+#include "mn/projection.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -82,10 +83,16 @@ public:
     std::optional<Pose> worldAnchor() const { return worldAnchor_; }
     void setWorldAnchor(const Pose& p) { worldAnchor_ = p; }
 
+    // Per-rig projection correction (axis flips + left/right swap). Persisted
+    // alongside the extrinsics so a dashboard-applied fix survives a restart.
+    const ProjectionCorrection& projection() const { return projection_; }
+    void setProjection(const ProjectionCorrection& p) { projection_ = p; }
+
 private:
     std::map<std::string, Pose> extrinsics_;
     BodyModel bodyModel_;
     std::optional<Pose> worldAnchor_;
+    ProjectionCorrection projection_;
 };
 
 } // namespace mn

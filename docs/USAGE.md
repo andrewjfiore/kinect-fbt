@@ -65,13 +65,15 @@ Tabs:
 | Tab | What it shows |
 |---|---|
 | **Overview** | Pipeline counters (frames in, fused %, trackers out), per-node cards (fps, last-frame age, body, watchdog restarts, last error), endpoint list, calibration summary |
-| **Skeleton** | Live fused body (front + top-down), sensor positions/view directions, tracker diamonds; polls ~15 Hz |
+| **Skeleton** | Live fused body (front + top-down), sensor positions/view directions, tracker diamonds; polls ~15 Hz. Also a **Projection health** panel: live validity check + Flip X/Y/Z and Swap L/R correction (see below) |
 | **Calibration** | Guided wizards for pair / body / playspace with live progress and RMSE; one job at a time |
 | **Events** | Structured warning/error feed from the in-process event log, filterable by level |
 | **Tutorial** | Interactive 7-step onboarding (standalone copy: [TUTORIAL.md](TUTORIAL.md)); opens automatically on first visit |
 
 Control it per run:
 
+- `marionette run` opens the dashboard in your default browser automatically;
+  `--no-open` suppresses that (timed `--duration` runs never auto-open).
 - `--no-dashboard` disables it for this run.
 - `--dashboard-port <p>` overrides the configured port.
 - Persistent settings live in the config's `dashboard` object
@@ -82,6 +84,42 @@ The dashboard binds loopback (`127.0.0.1`) by default and has no auth. To view
 it from another machine on your LAN or tailnet, set `"bind": "0.0.0.0"` in the
 config's `dashboard` object - an explicit choice, since anyone who can reach
 the port can run calibration jobs.
+
+## Projection health and axis correction
+
+Once fusion projects every sensor's view into the shared world frame, the
+result can still be wrong in a way calibration does not fix - the whole body
+mounted the wrong way round, mirrored, or (rarely) upside down. The **Skeleton**
+tab's **Projection health** panel handles both halves of this:
+
+**The validity check** runs on every fused frame and reports whether points
+project accurately:
+
+| Signal | Means |
+|---|---|
+| **Farthest joint** | Distance of the most-distant tracked joint from the origin. A joint metres away flags a bad extrinsic (out of bounds). |
+| **Worst bone error** | How far the worst limb segment falls outside its plausible length. Non-zero means a joint is being projected to an impossible place. |
+| **Head above hips** | Positive when upright. Clearly negative means the vertical axis is flipped. |
+| **Tracked joints** | How many of the 19 joints are currently tracked. |
+
+The status chip reads **OK** when everything is finite, in bounds, plausibly
+proportioned, and upright; otherwise **Check**, with a one-line reason.
+
+**The correction** is four switches, applied instantly to the live pipeline and
+saved with your calibration (so a fix sticks across restarts). Each flip negates
+that world axis; Swap L/R exchanges the left/right joints:
+
+| Symptom | Fix |
+|---|---|
+| Trackers face the wrong way (180 degrees) | **Flip X + Flip Z** (a proper yaw - handedness kept) |
+| Left and right are mirrored | **Flip X + Swap L/R** |
+| Everything is upside down | **Flip Y** |
+
+Because tracker orientations are derived from joint positions, correcting the
+projection here also corrects the trackers' orientations. The same state is
+available over the API at `GET`/`POST /api/projection`
+([DASHBOARD_API.md](DASHBOARD_API.md#get-apiprojection)) and persists in the
+calibration file under `"projection"`.
 
 ## doctor
 

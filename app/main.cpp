@@ -43,6 +43,12 @@
 #include <openvr.h>
 #endif
 
+#if defined(_WIN32)
+#include <windows.h>
+// shellapi.h must follow windows.h.
+#include <shellapi.h>
+#endif
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -67,6 +73,24 @@
 namespace {
 
 std::atomic<bool> g_stop{false};
+
+// Open a URL in the user's default browser (best effort, non-blocking). Only
+// ever called with our own loopback dashboard URL, so there is nothing to
+// escape; a failure just means the user clicks the link we printed instead.
+void openInBrowser(const std::string& url) {
+#if defined(_WIN32)
+    ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+#if defined(__APPLE__)
+    const std::string cmd = "open '" + url + "' >/dev/null 2>&1 &";
+#else
+    const std::string cmd = "xdg-open '" + url + "' >/dev/null 2>&1 &";
+#endif
+    // Best effort: the return is captured only to satisfy system()'s
+    // warn_unused_result; a failure just means the user opens the link we print.
+    [[maybe_unused]] const int rc = std::system(cmd.c_str());
+#endif
+}
 
 } // namespace
 
@@ -132,7 +156,7 @@ void printUsage() {
            "Usage:\n"
            "  marionette list-types\n"
            "  marionette run -c <config.json> [--duration <sec>] [--verbose]\n"
-           "                 [--no-dashboard] [--dashboard-port <p>]\n"
+           "                 [--no-dashboard] [--dashboard-port <p>] [--no-open]\n"
            "  marionette record -c <config.json> --node <id> -o <out.jsonl> [--duration <sec>]\n"
            "  marionette calibrate pair -c <config.json> --reference <id> --target <id>\n"
            "                            [--min-samples <n>] [--max-seconds <sec>]\n"
@@ -145,7 +169,8 @@ void printUsage() {
            "Commands:\n"
            "  list-types           List node and endpoint types compiled into this build.\n"
            "  run                  Run the pipeline: capture -> fusion -> trackers -> endpoints.\n"
-           "                       Serves the web dashboard (when built) unless --no-dashboard.\n"
+           "                       Serves the web dashboard (when built) unless --no-dashboard,\n"
+           "                       and opens it in your browser unless --no-open.\n"
            "  record               Run a single capture node, write its frames to a JSONL file.\n"
            "  calibrate pair       Solve a target sensor's extrinsic against a reference sensor.\n"
            "  calibrate body       Estimate per-user bone lengths from fused frames.\n"
@@ -364,6 +389,7 @@ int cmdRun(int argc, char** argv, const NodeRegistry& nodeReg, const EndpointReg
     double duration = 0.0;    // 0 = run until interrupted
     bool verbose = false;
     bool noDashboard = false;
+    bool noOpen = false;      // suppress auto-opening the dashboard in a browser
     size_t dashboardPort = 0; // 0 = keep the configured port
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -378,6 +404,8 @@ int cmdRun(int argc, char** argv, const NodeRegistry& nodeReg, const EndpointReg
             verbose = true;
         } else if (a == "--no-dashboard") {
             noDashboard = true;
+        } else if (a == "--no-open") {
+            noOpen = true;
         } else if (a == "--dashboard-port") {
             if (++i >= argc || !parseSize(argv[i], dashboardPort) || dashboardPort == 0 ||
                 dashboardPort > 65535)
@@ -473,6 +501,13 @@ int cmdRun(int argc, char** argv, const NodeRegistry& nodeReg, const EndpointReg
                                                            std::move(dopt));
         if (dash->start()) {
             mn::log::info("dashboard: ", dash->url());
+            // No-CLI launch: bring the dashboard up in the default browser so a
+            // double-clicked launcher lands the user straight on the UI. Timed
+            // runs (--duration) are scripted/tests, so skip the popup there.
+            if (!noOpen && duration <= 0.0) {
+                mn::log::info("opening ", dash->url(), " (use --no-open to disable)");
+                openInBrowser(dash->url());
+            }
         } else {
             mn::log::warn("dashboard failed to start (", dash->lastError(),
                           "); continuing without it");

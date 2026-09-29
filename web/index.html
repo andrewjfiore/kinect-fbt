@@ -226,6 +226,45 @@ h2.card-title { font-size: 15px; font-weight: 600; margin: 0 0 4px; letter-spaci
     color: #ffd778; }
 .chip-err { background: rgba(251, 113, 133, 0.13); border-color: rgba(251, 113, 133, 0.35);
     color: #ffaab6; }
+
+/* ---------- projection controls (skeleton tab) ---------- */
+.proj-card { margin-top: 16px; }
+.proj-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 2px; }
+.proj-sub { font-size: 12.5px; color: var(--ink-dim); }
+.proj-stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px; margin: 14px 0 18px;
+}
+.proj-stat {
+    background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line);
+    border-radius: 12px; padding: 9px 12px;
+}
+.proj-stat .k { font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--ink-faint); }
+.proj-stat .v { font-size: 16px; font-variant-numeric: tabular-nums; margin-top: 3px; }
+.proj-stat.bad { border-color: rgba(251, 113, 133, 0.35); background: rgba(251, 113, 133, 0.08); }
+.proj-stat.bad .v { color: #ffaab6; }
+.switch-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.switch { position: relative; display: inline-flex; align-items: center; gap: 9px;
+    cursor: pointer; padding: 8px 13px 8px 11px; border-radius: 12px;
+    border: 1px solid var(--line); background: rgba(255, 255, 255, 0.04);
+    user-select: none; transition: background 0.2s ease, border-color 0.2s ease; }
+.switch:hover { background: rgba(255, 255, 255, 0.07); }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch .track { position: relative; width: 34px; height: 20px; border-radius: 999px;
+    background: rgba(255, 255, 255, 0.16); transition: background 0.2s ease; flex: 0 0 auto; }
+.switch .track::after { content: ""; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 50%; background: #fff;
+    transition: transform 0.2s ease; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); }
+.switch input:checked + .track {
+    background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.switch input:checked + .track::after { transform: translateX(14px); }
+.switch input:checked ~ .lbl { color: var(--ink); }
+.switch input:focus-visible + .track {
+    outline: 2px solid rgba(34, 211, 238, 0.85); outline-offset: 2px; border-radius: 999px; }
+.switch .lbl { font-size: 13px; font-weight: 600; color: var(--ink-dim); }
+.proj-hint { font-size: 12px; color: var(--ink-faint); margin-top: 14px; line-height: 1.65; }
+.proj-hint strong { color: var(--ink-dim); font-weight: 600; }
 .bar {
     height: 6px; border-radius: 3px;
     background: rgba(255, 255, 255, 0.08);
@@ -749,6 +788,42 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
             </div>
         </div>
     </div>
+
+    <div class="card proj-card">
+        <div class="proj-top">
+            <h2 class="overline" style="margin:0">Projection health</h2>
+            <span class="chip" id="proj-chip">&#8212;</span>
+            <span class="proj-sub" id="proj-summary">Waiting for a tracked body&#8230;</span>
+        </div>
+        <div class="proj-stats">
+            <div class="proj-stat" id="proj-st-tracked">
+                <div class="k">Tracked joints</div><div class="v">&#8212;</div></div>
+            <div class="proj-stat" id="proj-st-radius">
+                <div class="k">Farthest joint</div><div class="v">&#8212;</div></div>
+            <div class="proj-stat" id="proj-st-bone">
+                <div class="k">Worst bone error</div><div class="v">&#8212;</div></div>
+            <div class="proj-stat" id="proj-st-upright">
+                <div class="k">Head above hips</div><div class="v">&#8212;</div></div>
+        </div>
+        <h2 class="overline" style="margin:0 0 9px">Axis correction</h2>
+        <div class="switch-row">
+            <label class="switch"><input type="checkbox" id="flip-x">
+                <span class="track"></span><span class="lbl">Flip X</span></label>
+            <label class="switch"><input type="checkbox" id="flip-y">
+                <span class="track"></span><span class="lbl">Flip Y</span></label>
+            <label class="switch"><input type="checkbox" id="flip-z">
+                <span class="track"></span><span class="lbl">Flip Z</span></label>
+            <label class="switch"><input type="checkbox" id="swap-lr">
+                <span class="track"></span><span class="lbl">Swap L / R</span></label>
+        </div>
+        <p class="proj-hint">
+            Trackers mirrored, backwards, or upside down? Correct the projection here.
+            <strong>Facing backwards:</strong> Flip X + Flip Z.
+            <strong>Mirrored left/right:</strong> Flip X + Swap&nbsp;L/R.
+            <strong>Upside down:</strong> Flip Y.
+            Changes apply instantly and are saved with your calibration.
+        </p>
+    </div>
 </section>
 
 <!-- ===== Calibration ===== -->
@@ -1003,10 +1078,14 @@ label.field { display: block; font-size: 12px; color: var(--ink-dim); margin: 10
                     <button class="btn btn-primary" type="button" data-go="skeleton">
                         Open the Skeleton tab</button>
                 </div>
-                <p class="tut-note">No hardware yet? Run
-                    <code>marionette run -c config/demo.json</code> - two synthetic
-                    sensors through the real fusion pipeline. A zero-hardware dry run
-                    of everything on this dashboard.</p>
+                <p class="tut-note"><strong>Body looks wrong?</strong> If it faces the
+                    wrong way, mirrors your left and right, or hangs upside down, that is
+                    a projection error - use the <strong>Projection health</strong> panel
+                    on the Skeleton tab. It flags accuracy problems live and gives you
+                    Flip X / Y / Z and Swap L/R switches to correct them in one click.</p>
+                <p class="tut-note">No hardware yet? The bundled demo runs two synthetic
+                    sensors through the real fusion pipeline - a zero-hardware dry run of
+                    everything on this dashboard.</p>
             </div>
 
             <div class="tut-page" data-step="5" hidden>
@@ -1270,6 +1349,8 @@ var state = {
     calibActive: false,
     calibKind: "",
     hand: "right",
+    proj: null,
+    projPending: false,
     tutStep: 1
 };
 var LEVELS = ["debug", "info", "warn", "error"];
@@ -1485,6 +1566,78 @@ function skelPollLoop() {
         // 30 Hz: matches the Kinect hardware skeleton rate (localhost, ~2 KB).
         setTimeout(skelPollLoop, 33);
     });
+}
+
+/* ---------------- projection health + axis correction ---------------- */
+function projPollLoop() {
+    var want = state.tab === "skeleton" && !document.hidden;
+    if (!want) { setTimeout(projPollLoop, 500); return; }
+    fetchJSON("/api/projection", null, 2000).then(function (r) {
+        if (r.body && typeof r.body === "object") applyProjection(r.body);
+    }).catch(function () { /* keep last */ }).finally(function () {
+        setTimeout(projPollLoop, 1000);
+    });
+}
+
+function setProjChecked(id, on) { var e = $(id); if (e) e.checked = !!on; }
+
+function setProjStat(id, text, bad) {
+    var e = $(id); if (!e) return;
+    var v = e.querySelector(".v");
+    if (v) v.textContent = text;
+    e.classList.toggle("bad", !!bad);
+}
+
+function applyProjection(p) {
+    state.proj = p;
+    /* Reflect the live flip state, unless a toggle POST is still in flight
+       (avoids the switch snapping back to a stale poll result mid-click). */
+    if (!state.projPending) {
+        setProjChecked("flip-x", p.flip_x);
+        setProjChecked("flip-y", p.flip_y);
+        setProjChecked("flip-z", p.flip_z);
+        setProjChecked("swap-lr", p.swap_lr);
+    }
+    var c = p.check || {};
+    var chip = $("proj-chip");
+    if (!c.evaluated) {
+        chip.className = "chip";
+        chip.textContent = "No body";
+        $("proj-summary").textContent = "Step into view to check projection accuracy.";
+    } else if (c.ok) {
+        chip.className = "chip chip-ok";
+        chip.textContent = "OK";
+        $("proj-summary").textContent = "Points project accurately.";
+    } else {
+        chip.className = "chip chip-warn";
+        chip.textContent = "Check";
+        $("proj-summary").textContent = c.summary || "projection issue";
+    }
+    var ev = !!c.evaluated;
+    setProjStat("proj-st-tracked", ev ? String(c.tracked_joints) : "—", false);
+    setProjStat("proj-st-radius", ev ? fmt1(c.worst_radius_m) + " m" : "—",
+        ev && !c.in_bounds);
+    setProjStat("proj-st-bone",
+        ev ? (c.worst_bone_error_m > 0 ? fmt1(c.worst_bone_error_m * 100) + " cm" : "0 cm")
+           : "—",
+        ev && !c.bones_plausible);
+    setProjStat("proj-st-upright", ev ? fmt1(c.head_above_hips_m) + " m" : "—",
+        ev && !c.upright_ok);
+}
+
+function sendProjection() {
+    state.projPending = true;
+    var payload = {
+        flip_x: $("flip-x").checked, flip_y: $("flip-y").checked,
+        flip_z: $("flip-z").checked, swap_lr: $("swap-lr").checked
+    };
+    postJSON("/api/projection", payload).then(function (r) {
+        if (r.body && typeof r.body === "object") {
+            state.projPending = false;
+            applyProjection(r.body);
+        }
+    }).catch(function () { /* leave switches as the user set them */ })
+      .finally(function () { state.projPending = false; });
 }
 
 function startSkelDraw() {
@@ -2156,6 +2309,13 @@ function boot() {
     $("body-start").addEventListener("click", startBody);
     $("ps-start").addEventListener("click", startPlayspace);
     $("calib-cancel").addEventListener("click", cancelCalib);
+    /* projection axis-correction toggles */
+    var flipIds = ["flip-x", "flip-y", "flip-z", "swap-lr"];
+    for (i = 0; i < flipIds.length; i++) {
+        var fe = $(flipIds[i]);
+        if (fe) fe.addEventListener("change", sendProjection);
+    }
+
     var handBtns = document.querySelectorAll("#wiz-playspace .seg-btn");
     for (var i = 0; i < handBtns.length; i++) {
         handBtns[i].addEventListener("click", function () {
@@ -2227,6 +2387,7 @@ function boot() {
     eventsLoop();
     calibLoop();
     skelPollLoop();
+    projPollLoop();
 }
 
 boot();
