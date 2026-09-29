@@ -5,7 +5,7 @@ Three independent calibrations, all stored in the config's `calibration_file`
 model**, and the SteamVR **playspace anchor**. Do them in that order.
 
 Every step can be run two ways: the CLI commands shown below, or the
-**dashboard Calibration tab** while `marionette run` is active
+**dashboard Calibrate tab** while `marionette run` is active
 ([USAGE.md](USAGE.md#dashboard)) - same solvers, same acceptance criteria,
 with live progress and RMSE in the browser. The dashboard runs one
 calibration job at a time.
@@ -60,7 +60,7 @@ reference sensor's frame is the world frame until a playspace anchor exists.
    --target <id>` (both required; `--min-samples` and `--max-seconds` are
    optional, defaults 200 and 60). With more than two nodes, calibrate each
    target against the reference (or an already-calibrated sensor) one at a
-   time. Or: dashboard **Calibration tab > Pair alignment**, pick reference
+   time. Or: dashboard **Calibrate tab > Sensor alignment**, pick reference
    and target, Start.
 2. Stand in the **overlap region** - both sensors must track your full body
    at once.
@@ -98,7 +98,7 @@ SlimeVR-style). Enables `fusion.bone_length_constraint`, which projects each
 joint onto the calibrated bone length and suppresses depth-noise stretch.
 
 1. `marionette calibrate body -c config.json` (`--seconds <sec>` optional,
-   default 15). Or: dashboard **Calibration tab > Body model**, set the
+   default 15). Or: dashboard **Calibrate tab > Body measurements**, set the
    capture length, Start.
 2. Stand fully in view of your best sensor (or the calibrated rig), arms
    slightly away from your body. Move gently - shift weight, bend each knee
@@ -122,7 +122,7 @@ tracked controller.
 1. Start SteamVR (via ALVR / Virtual Desktop / Link / wired headset).
 2. `marionette calibrate playspace -c config.json` (`--hand left|right` and
    `--seconds <sec>` optional, defaults right and 20). Or: dashboard
-   **Calibration tab > Playspace anchor**, pick the hand, Start - this
+   **Calibrate tab > Playspace sync**, pick the hand, Start - this
    samples against the live pipeline while it keeps running.
 3. Hold a SteamVR controller firmly in one hand and keep that wrist visible to
    the sensors. The solver pairs the fused wrist position (Marionette world)

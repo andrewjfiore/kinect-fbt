@@ -22,12 +22,13 @@ Strings from above, moving a body.
     Virtual Desktop, Steam Link, Quest Link for Quest 2/3 PCVR).
   - **VRChat OSC Trackers**: direct to the headset over LAN, no PCVR stream required
     (Quest standalone).
-- Serves a local web dashboard at http://127.0.0.1:8211 while running: live skeleton view,
-  pipeline status, event feed, calibration wizards, and an onboarding tutorial.
+- Serves a local web dashboard at http://127.0.0.1:8211 while running: plain-language
+  status and setup checklist, live skeleton view, calibration wizards, event log, and a
+  built-in 5-step guide.
 - `marionette doctor` health-checks the whole stack (backends, sensors, config,
   calibration, ports, SteamVR driver registration), with `--json` for scripts.
 - Self-heals at runtime: a watchdog recreates and restarts capture nodes that go silent,
-  and structured warning/error events are tracked in-process (dashboard Events tab).
+  and structured warning/error events are tracked in-process (dashboard Log tab).
 
 ## Layout
 
@@ -45,7 +46,7 @@ Strings from above, moving a body.
 | `web/` | The dashboard's single-file UI (`index.html`, embedded at build time) |
 | `app/` | `marionette` CLI: run, record, calibrate, doctor |
 | `installer/` | No-CLI installers: Windows (Inno Setup + launcher), Linux (AppImage / tarball) |
-| `docs/` | Install, user guide, design, build, usage, calibration, tutorial, dashboard API |
+| `docs/` | Install, user guide, design, build, usage, calibration, tutorial, classroom/lab guide, dashboard API |
 
 ## Install and run (no command line)
 
@@ -63,6 +64,8 @@ double-click it - no build tools, no terminal:
 Full steps: **[docs/INSTALL.md](docs/INSTALL.md)**. Then follow the built-in
 tutorial or the **[User Guide](docs/USER_GUIDE.md)**. Everything works against a
 built-in demo before you connect any hardware.
+Setting up a station for a class, club, or teaching lab:
+[docs/CLASSROOM.md](docs/CLASSROOM.md).
 
 ## Build from source
 
