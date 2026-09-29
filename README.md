@@ -1,5 +1,7 @@
 # Marionette
 
+> **LLM coding experiment.** This project was built mostly by AI coding agents as an experiment. It is not maintained, reviewed, or tested for real use. Do not rely on it for anything that matters.
+
 Multi-sensor full-body tracking for SteamVR and Quest (VRChat OSC), built around a variable
 number of Microsoft Kinect sensors (v1 and v2). Windows and Linux.
 
